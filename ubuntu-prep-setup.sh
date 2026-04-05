@@ -61,7 +61,7 @@ check_os() {
 install_base_dependencies() {
     print_header "Ensuring Base Dependencies are Installed"
     # These are required by various installation functions
-    sudo apt-get install -y curl git wget unzip lsb-release gnupg ca-certificates
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git wget unzip lsb-release gnupg ca-certificates
     print_success "Base dependencies are present."
 }
 # --- Installation Functions ---
@@ -70,7 +70,7 @@ install_base_dependencies() {
 update_system() {
     print_header "Updating System Packages"
     sudo apt-get update
-    sudo apt-get upgrade -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
     print_success "System updated and upgraded."
 }
 
@@ -78,7 +78,7 @@ update_system() {
 install_zsh() {
     print_header "Installing Zsh, Oh My Zsh, and Plugins"
     print_info "Installing packages: zsh, tmux, micro"
-    sudo apt-get install -y zsh tmux micro
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y zsh tmux micro
 
     if [ ! -d "$HOME/.oh-my-zsh" ]; then
         print_info "Installing Oh My Zsh..."
@@ -175,7 +175,7 @@ EOF
 # 1. Install Python
 install_python() {
     print_header "Installing Python and Virtual Environment Tools"
-    sudo apt-get install -y python3 python3-pip python3-dev python3-venv build-essential libssl-dev libffi-dev python3-setuptools
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-dev python3-venv build-essential libssl-dev libffi-dev python3-setuptools
     print_success "Python environment installed."
 }
 
@@ -199,7 +199,7 @@ install_docker() {
     sudo apt-get update
 
     print_info "Installing Docker packages..."
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
     print_info "Adding current user to the 'docker' group..."
     sudo usermod -aG docker $USER
@@ -276,7 +276,7 @@ install_nvidia_vgpu() {
                         deb_file=$(find "$tmp_dir" -name '*.deb' | head -n 1)
                         if [[ -n "$deb_file" ]]; then
                             print_info "Installing ${deb_file}..."
-                            sudo apt-get install -y "$deb_file"
+                            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
                             print_success "vGPU driver installed successfully."
                         else
                             echo "❌ Could not find a .deb file in the downloaded archive."
@@ -302,7 +302,7 @@ install_cuda_toolkit() {
     sudo dpkg -i cuda-keyring_1.1-1_all.deb
     rm cuda-keyring_1.1-1_all.deb
     sudo apt-get update
-    sudo apt-get -y install cuda-toolkit
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -y install cuda-toolkit
 }
 
 # 7. Install NVIDIA Container Toolkit
@@ -313,15 +313,15 @@ install_container_toolkit() {
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
     sudo apt-get update
-    sudo apt-get install -y nvidia-container-toolkit
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
 }
 
 # 8. Install cuDNN
 install_cudnn() {
     print_info "Installing cuDNN..."
-    sudo apt-get install -y zlib1g
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y zlib1g
     # This will install the latest cuDNN compatible with the installed CUDA toolkit
-    sudo apt-get install -y cudnn9-cuda-13 # As requested, for CUDA 13.x
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -y install cudnn9-cuda-13 # As requested, for CUDA 13.x
     POST_INSTALL_ACTIONS+=("reboot")
 }
 
@@ -351,7 +351,7 @@ install_gemini_cli_only() {
     npm install -g npm@latest
 
     print_info "Installing build essentials for native Node modules..."
-    sudo apt-get install -y build-essential python3 make g++
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential python3 make g++
 
     print_info "Installing Google Gemini CLI..."
     print_info "(Note: npm may show deprecation warnings for sub-dependencies, which are generally safe to ignore)"
@@ -390,17 +390,29 @@ print_final_summary() {
 
     print_header "Next Steps & Important Information"
 
+    local shell_changed=0
+    if [[ "$unique_actions" == *"zsh"* ]]; then shell_changed=1; fi
+
+    local path_changed=0
+    if [[ "$unique_actions" == *"nvm"* ]]; then path_changed=1; fi
+
     if [[ "$unique_actions" == *"docker"* ]]; then
         print_info "To use Docker without 'sudo', you must LOG OUT and LOG BACK IN."
         print_info "After logging back in, you can test your installation with: docker run hello-world"
         echo "" # Newline for spacing
     fi
 
-    if [[ "$unique_actions" == *"nvm"* || "$unique_actions" == *"zsh"* ]]; then
-        echo -e "\e[1;33mTo activate newly installed shell commands (like nvm, node, gemini, zsh), you must either:\e[0m"
-        echo -e "  1. Open a NEW terminal window."
-        echo -e "  2. OR, run the following command in your CURRENT terminal:"
-        echo -e "     \e[1;32msource ~/.zshrc\e[0m"
+    if [[ $shell_changed -eq 1 ]]; then
+        echo -e "\e[1;33mYour default shell has been changed to Zsh.\e[0m"
+        echo -e "To start using Zsh and activate all newly installed commands (like nvm, node, gemini), you must:"
+        echo -e "  \e[1;32mOpen a NEW terminal window.\e[0m"
+        echo -e "(Or, log out and log back in)."
+        echo ""
+    elif [[ $path_changed -eq 1 ]]; then
+        echo -e "\e[1;33mTo activate newly installed commands (like nvm, node, gemini), you must either:\e[0m"
+        echo -e "  1. \e[1;32mOpen a NEW terminal window.\e[0m"
+        echo -e "  2. OR, run the following command in your CURRENT terminal (assuming you use bash):"
+        echo -e "     \e[1;32msource ~/.bashrc\e[0m"
         echo "" # Newline for spacing
     fi
 
