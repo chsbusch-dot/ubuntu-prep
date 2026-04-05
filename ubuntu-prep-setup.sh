@@ -219,11 +219,9 @@ install_nvm_node() {
     print_info "Node version: $(node -v), NPM version: $(npm -v)"
 }
 
-# 7, 8, 9. Install NVIDIA Stack
-install_nvidia_stack() {
-    print_header "Installing NVIDIA Stack (VGPU, CUDA, Container Toolkit)"
-
-    # 7. NVIDIA vGPU Drivers (via NGC CLI)
+# 5. Install NVIDIA vGPU Driver
+install_nvidia_vgpu() {
+    print_header "Installing NVIDIA vGPU Driver"
     print_info "Installing NVIDIA NGC CLI..."
     if ! command -v ngc &> /dev/null; then
         wget --content-disposition https://ngc.nvidia.com/downloads/ngccli_linux.zip && \
@@ -286,8 +284,10 @@ install_nvidia_stack() {
             fi
         fi
     fi
+}
 
-    # 8. CUDA Toolkit
+# 6. Install CUDA Toolkit
+install_cuda_toolkit() {
     print_info "Installing CUDA Toolkit..."
     # Make CUDA repo installation dynamic based on Ubuntu version
     UBUNTU_VERSION=$(lsb_release -sr | tr -d '.')
@@ -296,8 +296,10 @@ install_nvidia_stack() {
     rm cuda-keyring_1.1-1_all.deb
     sudo apt-get update
     sudo apt-get -y install cuda-toolkit
+}
 
-    # 9. NVIDIA Container Toolkit
+# 7. Install NVIDIA Container Toolkit
+install_container_toolkit() {
     print_info "Installing NVIDIA Container Toolkit..."
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
@@ -305,21 +307,20 @@ install_nvidia_stack() {
         sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
     sudo apt-get update
     sudo apt-get install -y nvidia-container-toolkit
+}
 
-    # 9. cuDNN
+# 8. Install cuDNN
+install_cudnn() {
     print_info "Installing cuDNN..."
     sudo apt-get install -y zlib1g
     # This will install the latest cuDNN compatible with the installed CUDA toolkit
     sudo apt-get install -y cudnn9-cuda-13 # As requested, for CUDA 13.x
-
-    print_success "NVIDIA Stack installation process complete."
     print_info "A system reboot is highly recommended to load all drivers correctly."
 }
 
-# 6. Install Gemini CLI and OpenClaw
-install_gemini_cli() {
-    print_header "Installing Gemini CLI and OpenClaw"
-
+# 9. Install Google Gemini CLI
+install_gemini_cli_only() {
+    print_header "Installing Google Gemini CLI"
     # Ensure NVM and NPM are available by sourcing NVM if it exists
     if ! command -v nvm &> /dev/null; then
         print_info "NVM not found. Attempting to source it for this session..."
@@ -328,7 +329,7 @@ install_gemini_cli() {
             # shellcheck source=/dev/null
             \. "$NVM_DIR/nvm.sh"
         else
-            echo "❌ NVM is not installed. Please run option 5 'Install NVM, Node.js & NPM' first."
+            echo "❌ NVM is not installed. Please run the 'Install NVM' option first."
             return 1 # Use return to avoid exiting the whole script
         fi
     fi
@@ -348,7 +349,12 @@ install_gemini_cli() {
     print_info "Installing Google Gemini CLI..."
     # Using npm with nvm does not require sudo for global packages
     npm install -g @google/gemini-cli@latest
+    print_success "Google Gemini CLI installed."
+}
 
+# 10. Install OpenClaw
+install_openclaw() {
+    print_header "Installing OpenClaw"
     print_info "Installing OpenClaw..."
     curl -fsSL https://openclaw.ai/install.sh | bash
 
@@ -358,7 +364,7 @@ install_gemini_cli() {
     export PATH="$HOME/.local/bin:$PATH"
     openclaw onboard --install-daemon
 
-    print_success "Gemini CLI and OpenClaw installation complete."
+    print_success "OpenClaw installation complete."
     print_info "You may need to restart your shell for all changes to take effect."
 }
 
@@ -366,24 +372,27 @@ install_gemini_cli() {
 
 show_menu() {
     # This function takes the selection array by reference to display the state
-    local -n _selections_ref=$1
     local options=(
         "Install Oh My Zsh & Dev Tools (git, tmux, micro)"
         "Install Python Environment"
         "Install Docker and Docker Compose"
         "Install NVM, Node.js & NPM"
-        "Install NVIDIA Stack (VGPU, CUDA, Container Toolkit)"
-        "Install Gemini CLI & OpenClaw"
+        "Install NVIDIA vGPU Driver"
+        "Install CUDA Toolkit"
+        "Install NVIDIA Container Toolkit"
+        "Install cuDNN"
+        "Install Google Gemini CLI"
+        "Install OpenClaw"
     )
 
     clear
     echo -e "\n\e[1;35m--- Ubuntu Prep Script Menu ---\e[0m"
-    echo "Use numbers [1-6] to toggle an option. Press 'a' to select all."
+    echo "Use numbers [1-10] to toggle an option. Press 'a' to select all."
     echo "Press 'i' to install selected, or 'q' to quit."
     echo "---------------------------------"
 
     for i in "${!options[@]}"; do
-        if [[ ${_selections_ref[$i]} -eq 1 ]]; then
+        if [[ ${selections[i]} -eq 1 ]]; then
             echo -e " \e[1;32m[x]\e[0m $((i+1)). ${options[$i]}"
         else
             echo -e " [ ] $((i+1)). ${options[$i]}"
@@ -398,24 +407,36 @@ main() {
     update_system
     install_base_dependencies
 
-    local selections=(0 0 0 0 0 0)
-    local funcs=(install_zsh install_python install_docker install_nvm_node install_nvidia_stack install_gemini_cli)
+    local selections=(0 0 0 0 0 0 0 0 0 0)
+    local funcs=(
+        install_zsh
+        install_python
+        install_docker
+        install_nvm_node
+        install_nvidia_vgpu
+        install_cuda_toolkit
+        install_container_toolkit
+        install_cudnn
+        install_gemini_cli_only
+        install_openclaw
+    )
 
     while true; do
-        show_menu selections
-        read -rsn1 -p "Your choice: " choice
+        show_menu
+        read -p "Your choice: " choice
 
-        case $choice in
-            [1-6])
-                local index=$((choice - 1))
-                selections[$index]=$((1 - selections[$index]))
-                ;;
-            a|A)
-                for i in "${!selections[@]}"; do selections[$i]=1; done
-                ;;
-            i|I) break ;;
-            q|Q) echo -e "\nExiting."; exit 0 ;;
-        esac
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#selections[@]} ]; then
+            local index=$((choice - 1))
+            selections[index]=$((1 - selections[index]))
+        elif [[ "$choice" == "a" || "$choice" == "A" ]]; then
+            for i in "${!selections[@]}"; do selections[i]=1; done
+        elif [[ "$choice" == "i" || "$choice" == "I" ]]; then
+            break
+        elif [[ "$choice" == "q" || "$choice" == "Q" ]]; then
+            echo -e "\nExiting."; exit 0
+        else
+            echo -e "\nInvalid option." && sleep 1
+        fi
     done
 
     echo -e "\n--- Starting Installation ---"
