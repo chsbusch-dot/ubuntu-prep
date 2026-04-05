@@ -11,6 +11,9 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+# Global array to track post-installation actions
+POST_INSTALL_ACTIONS=()
+
 # --- Helper Functions ---
 
 # Function to print colored headings
@@ -165,7 +168,8 @@ EOF
         done
     fi
 
-    print_success "Zsh and plugins installed. Please restart your shell or run 'zsh' to use it."
+    print_success "Zsh and plugins installed."
+    POST_INSTALL_ACTIONS+=("zsh")
 }
 
 # 1. Install Python
@@ -201,8 +205,7 @@ install_docker() {
     sudo usermod -aG docker $USER
 
     print_success "Docker installed successfully."
-    print_info "You need to log out and log back in for the group changes to take effect."
-    print_info "After logging back in, test with: docker run hello-world"
+    POST_INSTALL_ACTIONS+=("docker")
 }
 
 # 3, 4, 5. Install NVM, Node, and NPM
@@ -220,12 +223,7 @@ install_nvm_node() {
 
     print_success "NVM, Node.js, and NPM installed."
     print_info "Node version: $(node -v), NPM version: $(npm -v)"
-    print_info "To use 'nvm', 'node', and 'npm' commands, please open a new terminal or run: source ~/.zshrc"
-    
-    echo -e "\n\e[1;33mIMPORTANT: Your current terminal session does not have the new paths yet.\e[0m"
-    print_info "To use 'nvm', 'node', and 'npm', you must open a new terminal or run the following command:"
-    echo -e "  \e[1;32msource ~/.zshrc\e[0m"
-    print_info "Do NOT use 'sudo apt install npm' as it will conflict with NVM."
+    POST_INSTALL_ACTIONS+=("nvm")
 }
 
 # 5. Install NVIDIA vGPU Driver
@@ -324,7 +322,7 @@ install_cudnn() {
     sudo apt-get install -y zlib1g
     # This will install the latest cuDNN compatible with the installed CUDA toolkit
     sudo apt-get install -y cudnn9-cuda-13 # As requested, for CUDA 13.x
-    print_info "A system reboot is highly recommended to load all drivers correctly."
+    POST_INSTALL_ACTIONS+=("reboot")
 }
 
 # 9. Install Google Gemini CLI
@@ -356,14 +354,11 @@ install_gemini_cli_only() {
     sudo apt-get install -y build-essential python3 make g++
 
     print_info "Installing Google Gemini CLI..."
+    print_info "(Note: npm may show deprecation warnings for sub-dependencies, which are generally safe to ignore)"
     # Using npm with nvm does not require sudo for global packages
     npm install -g @google/gemini-cli@latest
     print_success "Google Gemini CLI installed."
-    print_info "To use the 'gemini' command, please open a new terminal or run: source ~/.zshrc"
-
-    echo -e "\n\e[1;33mIMPORTANT: Your current terminal session does not have the new paths yet.\e[0m"
-    print_info "To use the 'gemini' command, you must open a new terminal or run the following command:"
-    echo -e "  \e[1;32msource ~/.zshrc\e[0m"
+    POST_INSTALL_ACTIONS+=("nvm") # Depends on nvm path
 }
 
 # 10. Install OpenClaw
@@ -379,7 +374,39 @@ install_openclaw() {
     openclaw onboard --install-daemon
 
     print_success "OpenClaw installation complete."
-    print_info "You may need to restart your shell for all changes to take effect."
+    POST_INSTALL_ACTIONS+=("nvm") # Modifies path, needs same action as nvm
+}
+
+# --- Final Summary ---
+
+print_final_summary() {
+    # Make array unique by converting to a string, sorting, and converting back
+    local unique_actions
+    unique_actions=$(echo "${POST_INSTALL_ACTIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+
+    if [[ -z "$unique_actions" ]]; then
+        return
+    fi
+
+    print_header "Next Steps & Important Information"
+
+    if [[ "$unique_actions" == *"docker"* ]]; then
+        print_info "To use Docker without 'sudo', you must LOG OUT and LOG BACK IN."
+        print_info "After logging back in, you can test your installation with: docker run hello-world"
+        echo "" # Newline for spacing
+    fi
+
+    if [[ "$unique_actions" == *"nvm"* || "$unique_actions" == *"zsh"* ]]; then
+        echo -e "\e[1;33mTo activate newly installed shell commands (like nvm, node, gemini, zsh), you must either:\e[0m"
+        echo -e "  1. Open a NEW terminal window."
+        echo -e "  2. OR, run the following command in your CURRENT terminal:"
+        echo -e "     \e[1;32msource ~/.zshrc\e[0m"
+        echo "" # Newline for spacing
+    fi
+
+    if [[ "$unique_actions" == *"reboot"* ]]; then
+        print_info "A system reboot is highly recommended to ensure all NVIDIA drivers are loaded correctly."
+    fi
 }
 
 # --- Main Menu ---
@@ -464,6 +491,7 @@ main() {
 
     if [[ $something_installed -eq 1 ]]; then
         print_success "Selected installations are complete."
+        print_final_summary
     else
         print_info "No options were selected for installation."
     fi
