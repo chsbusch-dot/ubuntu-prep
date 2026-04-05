@@ -245,10 +245,13 @@ install_nvidia_vgpu() {
     print_header "Installing NVIDIA vGPU Driver"
     print_info "Installing NVIDIA NGC CLI..."
     if ! command -v ngc &> /dev/null; then
-        wget --content-disposition https://ngc.nvidia.com/downloads/ngccli_linux.zip && \
-        unzip ngccli_linux.zip && \
-        echo "y" | ./ngc-cli/ngc-cli/install
-        export PATH="$PATH:$(pwd)/ngc-cli"
+        print_info "Downloading and extracting NGC CLI silently..."
+        wget --content-disposition https://ngc.nvidia.com/downloads/ngccli_linux.zip -qO ngccli_linux.zip
+        unzip -q ngccli_linux.zip
+        print_info "Copying ngc binary to /usr/local/bin..."
+        sudo cp ngc-cli/ngc /usr/local/bin/ngc
+        rm -rf ngc-cli ngccli_linux.zip
+        print_success "NVIDIA NGC CLI installed."
     else
         print_info "NGC CLI is already installed."
     fi
