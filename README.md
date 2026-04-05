@@ -54,7 +54,7 @@ chmod +x ubuntu-prep-setup.sh
 
 ### API Keys
 
-The script will create a `~/.zsh_secrets` file to store your API keys securely. You will be prompted to add your keys either one-by-one or by editing the file directly with `nano`. This file is automatically sourced by your `.zshrc` but is ignored by Git to prevent accidental exposure.
+The script will create a `~/.zshenv_secrets` file to store your API keys securely. You will be prompted to add your keys either one-by-one or by editing the file directly with `nano`. This file is automatically sourced by your `.zshrc` but is ignored by Git to prevent accidental exposure.
 
 ## License
 

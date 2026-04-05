@@ -112,8 +112,8 @@ install_zsh() {
     # Replace the default plugins line with the new one
     sed -i 's/^plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-history-substring-search)/' ~/.zshrc
 
-    print_info "Creating ~/.zsh_secrets template for API keys..."
-    cat <<'EOF' > ~/.zsh_secrets
+    print_info "Creating ~/.zshenv_secrets template for API keys..."
+    cat <<'EOF' > ~/.zshenv_secrets
 # This file is for storing secrets and API keys.
 # It is sourced by ~/.zshrc if it exists.
 # Make sure this file is NOT committed to version control.
@@ -127,14 +127,14 @@ export CLAUDE_API_KEY=""
 export NVIDIA_NGC_API_KEY=""
 EOF
 
-    # Add sourcing of .zsh_secrets to .zshrc
-    if ! grep -q ".zsh_secrets" ~/.zshrc; then
-        echo -e '\n# Source secrets file if it exists\nif [[ -f ~/.zsh_secrets ]]; then\n  source ~/.zsh_secrets\nfi' >> ~/.zshrc
+    # Add sourcing of .zshenv_secrets to .zshrc
+    if ! grep -q ".zshenv_secrets" ~/.zshrc; then
+        echo -e '\n# Source secrets file if it exists\nif [[ -f ~/.zshenv_secrets ]]; then\n  source ~/.zshenv_secrets\nfi' >> ~/.zshrc
     fi
 
     print_info "Adding custom Zsh prompt..."
     # Add custom prompt to override the robbyrussell theme default
-    echo -e '\n# Custom prompt to show full path\nPROMPT="%{$fg_bold[yellow]%}%n@%m %{$reset_color%}%(?:%{$fg_bold[green]%}➜ :%{$fg_bold[red]%}➜ ) %{$fg[cyan]%}%/%{$reset_color%}"' >> ~/.zshrc
+    echo -e '\n# Custom prompt to show full path\nPROMPT="%{$fg_bold[yellow]%}%n@%m %{$reset_color%}%(?:%{$fg_bold[green]%}➜ :%{$fg_bold[red]%}➜ ) %{$fg[cyan]%}%/%{$reset_color%} "' >> ~/.zshrc
 
     # Interactive prompt for API keys
     read -p "Do you want to add API keys now? [y/N]: " add_keys_now
@@ -152,15 +152,15 @@ EOF
                     for key_name in "${keys_to_prompt[@]}"; do
                         read -p "Enter value for ${key_name}: " key_value
                         if [[ -n "$key_value" ]]; then
-                            sed -i "s|export ${key_name}=\"\"|export ${key_name}=\"${key_value}\"|" ~/.zsh_secrets
+                            sed -i "s|export ${key_name}=\"\"|export ${key_name}=\"${key_value}\"|" ~/.zshenv_secrets
                         fi
                     done
-                    print_success "API keys have been saved to ~/.zsh_secrets."
+                    print_success "API keys have been saved to ~/.zshenv_secrets."
                     break
                     ;;
                 "Edit file manually with nano")
-                    print_info "Opening ~/.zsh_secrets with nano. Save with Ctrl+X, then Y, then Enter."
-                    nano ~/.zsh_secrets
+                    print_info "Opening ~/.zshenv_secrets with nano. Save with Ctrl+X, then Y, then Enter."
+                    nano ~/.zshenv_secrets
                     print_success "Finished editing secrets file."
                     break
                     ;;
