@@ -134,7 +134,7 @@ EOF
 
     print_info "Adding custom Zsh prompt..."
     # Add custom prompt to override the robbyrussell theme default
-    echo -e '\n# Custom prompt to override robbyrussell theme\nPROMPT="%{$fg_bold[yellow]%}%n@%m %{$reset_color%}%(?:%{$fg_bold[green]%}➜ :%{$fg_bold[red]%}➜ ) %{$fg[cyan]%}%c%{$reset_color%}"' >> ~/.zshrc
+    echo -e '\n# Custom prompt to show full path\nPROMPT="%{$fg_bold[yellow]%}%n@%m %{$reset_color%}%(?:%{$fg_bold[green]%}➜ :%{$fg_bold[red]%}➜ ) %{$fg[cyan]%}%/%{$reset_color%}"' >> ~/.zshrc
 
     # Interactive prompt for API keys
     read -p "Do you want to add API keys now? [y/N]: " add_keys_now
@@ -215,7 +215,8 @@ install_docker() {
 # 3, 4, 5. Install NVM, Node, and NPM
 install_nvm_node() {
     print_header "Installing NVM, Node.js (LTS), and NPM"
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    print_info "Running the NVM installation script silently..."
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash > /dev/null 2>&1
     print_info "NVM installation script executed. Sourcing NVM to continue..."
 
     # Source NVM for the current script session
