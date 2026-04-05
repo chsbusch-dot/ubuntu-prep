@@ -269,6 +269,17 @@ install_nvidia_vgpu() {
         sudo mv "${tmp_dir}/ngc-cli" /opt/
         print_info "Adding NGC CLI to system-wide PATH via /etc/profile.d/ngc.sh..."
         echo 'export PATH="/opt/ngc-cli:$PATH"' | sudo tee /etc/profile.d/ngc.sh > /dev/null
+
+        # Also add to user's shell config files to ensure it's available in new non-login shells
+        local ngc_path_str='export PATH="/opt/ngc-cli:$PATH"'
+        if [ -f "$HOME/.zshrc" ] && ! grep -q "/opt/ngc-cli" "$HOME/.zshrc"; then
+            print_info "Adding NGC CLI path to ~/.zshrc"
+            echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.zshrc"
+        fi
+        if [ -f "$HOME/.bashrc" ] && ! grep -q "/opt/ngc-cli" "$HOME/.bashrc"; then
+            print_info "Adding NGC CLI path to ~/.bashrc"
+            echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.bashrc"
+        fi
         rm -rf "${tmp_dir}"
         print_success "NVIDIA NGC CLI installed."
     fi
