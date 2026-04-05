@@ -118,13 +118,15 @@ install_zsh() {
 # It is sourced by ~/.zshrc if it exists.
 # Make sure this file is NOT committed to version control.
 
-# Placeholders for API keys and secrets
-export GITHUB_TOKEN=""
-export AWS_SECRET_ACCESS_KEY=""
-export OPENAI_API_KEY=""
-export GEMINI_PRO_API_KEY=""
-export CLAUDE_API_KEY=""
-export NVIDIA_NGC_API_KEY=""
+# --- API Key Placeholders ---
+# Uncomment and fill in the values for the services you use.
+
+# export GITHUB_TOKEN="your_github_token"
+# export AWS_SECRET_ACCESS_KEY="your_aws_secret"
+# export OPENAI_API_KEY="your_openai_key"
+# export GEMINI_PRO_API_KEY="your_gemini_key"
+# export CLAUDE_API_KEY="your_claude_key"
+# export NVIDIA_NGC_API_KEY="your_ngc_key"
 EOF
 
     # Add sourcing of .zshenv_secrets to .zshrc
@@ -152,7 +154,7 @@ EOF
                     for key_name in "${keys_to_prompt[@]}"; do
                         read -p "Enter value for ${key_name}: " key_value
                         if [[ -n "$key_value" ]]; then
-                            sed -i "s|export ${key_name}=\"\"|export ${key_name}=\"${key_value}\"|" ~/.zshenv_secrets
+                            sed -i "s|# export ${key_name}=.*|export ${key_name}=\"${key_value}\"|" ~/.zshenv_secrets
                         fi
                     done
                     print_success "API keys have been saved to ~/.zshenv_secrets."
