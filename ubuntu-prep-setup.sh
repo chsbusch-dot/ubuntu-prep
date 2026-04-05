@@ -415,7 +415,7 @@ main() {
                 ;;
             i|I) break ;;
             q|Q) echo -e "\nExiting."; exit 0 ;;
-        fi
+        esac
     done
 
     echo -e "\n--- Starting Installation ---"
