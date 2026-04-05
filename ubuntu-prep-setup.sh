@@ -126,6 +126,7 @@ install_zsh() {
 # export OPENAI_API_KEY="your_openai_key"
 # export GOOGLE_API_KEY="your_google_api_key"
 # export CLAUDE_API_KEY="your_claude_key"
+# export NVIDIA_NGC_ORG_ID="your_ngc_org_id"
 # export NVIDIA_NGC_API_KEY="your_ngc_key"
 EOF
 
@@ -156,7 +157,7 @@ EOP
                     print_info "Please enter the value for each key. Press Enter to skip a key."
                     keys_to_prompt=(
                         "GITHUB_TOKEN" "AWS_SECRET_ACCESS_KEY" "OPENAI_API_KEY"
-                        "GOOGLE_API_KEY" "CLAUDE_API_KEY" "NVIDIA_NGC_API_KEY"
+                        "GOOGLE_API_KEY" "CLAUDE_API_KEY" "NVIDIA_NGC_ORG_ID" "NVIDIA_NGC_API_KEY"
                     )
                     for key_name in "${keys_to_prompt[@]}"; do
                         read -p "Enter value for ${key_name}: " key_value
@@ -309,24 +310,45 @@ install_nvidia_vgpu() {
         return 0 # Exit the function gracefully
     fi
 
-    # --- Start NGC Configuration ---    
+    # --- Start NGC Configuration ---
     print_info "Launching interactive NGC configuration..."
+    
+    local ngc_api_key_found=false
+    local ngc_org_id_found=false
     
     if [ -f "$HOME/.zshenv_secrets" ]; then
         # Check if a key has been set in the secrets file to provide a helpful message.
-        local key_exists
-        key_exists=$(grep -E '^export NVIDIA_NGC_API_KEY=' "$HOME/.zshenv_secrets" || true)
-        if [[ -n "$key_exists" ]]; then
-            echo -e "\e[1;33mAn API key was found in ~/.zshenv_secrets. Please copy it from there and paste it when prompted.\e[0m"
-        else
-            echo -e "\e[1;33mNo API key was found in your secrets file. Please have your key ready to paste.\e[0m"
-        fi
+        if grep -qE '^[[:space:]]*export[[:space:]]+NVIDIA_NGC_API_KEY=' "$HOME/.zshenv_secrets"; then ngc_api_key_found=true; fi
+        if grep -qE '^[[:space:]]*export[[:space:]]+NVIDIA_NGC_ORG_ID=' "$HOME/.zshenv_secrets"; then ngc_org_id_found=true; fi
+    fi
+
+    echo -e "\e[1;33mIMPORTANT: You will be prompted for your NGC CLI configuration.\e[0m"
+    echo -e "\e[1;36mFollow these steps carefully:\e[0m"
+    
+    if [[ "$ngc_api_key_found" == true ]]; then
+        print_info "1. An API key was found in ~/.zshenv_secrets. Please copy it from there and paste it when prompted."
+    else
+        print_info "1. No API key was found in your secrets file. Please have your key ready to paste when prompted."
+    fi
+
+    if [[ "$ngc_org_id_found" == true ]]; then
+        print_info "2. An Org ID was found in ~/.zshenv_secrets. Please copy it from there."
+        print_info "   When prompted for 'Enter org [no-org]. Choices: [...]', you MUST type or paste your Org ID. Pressing Enter will NOT work."
+    else
+        print_info "2. No Org ID was found in your secrets file."
+        print_info "   When prompted for 'Enter org [no-org]. Choices: [...]', you MUST type or paste one of the provided choices. Pressing Enter will NOT work."
     fi
     
+    print_info "3. For 'Enter team [no-team]', you can usually press Enter to accept the default ('no-team')."
+    print_info "4. For 'Enter ace [no-ace]', you can usually press Enter to accept the default ('no-ace')."
+    print_info "5. For 'Enter CLI output format type [ascii]', you can usually press Enter to accept the default ('ascii')."
+    echo ""
+
     # Run the interactive setup and let the user handle it.
     # This is the most reliable method given the tool's complex interactivity.
     if ngc config set; then
         print_success "NGC CLI configured successfully."
+        print_info "(A 'grpc_wait_for_shutdown' error may appear, but it is generally safe to ignore if the config was saved.)"
     else
         echo "❌ Failed to configure NGC CLI. Please try manually with 'ngc config set'."
     fi
