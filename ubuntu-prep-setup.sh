@@ -245,12 +245,22 @@ install_nvidia_vgpu() {
     print_header "Installing NVIDIA vGPU Driver"
     print_info "Installing NVIDIA NGC CLI..."
     if ! command -v ngc &> /dev/null; then
-        print_info "Downloading and extracting NGC CLI silently..."
-        wget --content-disposition https://ngc.nvidia.com/downloads/ngccli_linux.zip -qO ngccli_linux.zip
-        unzip -q ngccli_linux.zip
-        print_info "Copying ngc binary to /usr/local/bin..."
-        sudo cp ngc-cli/ngc /usr/local/bin/ngc
-        rm -rf ngc-cli ngccli_linux.zip
+        local tmp_dir
+        tmp_dir=$(mktemp -d)
+        print_info "Downloading and extracting NGC CLI to a temporary directory..."
+        wget --content-disposition https://ngc.nvidia.com/downloads/ngccli_linux.zip -qO "${tmp_dir}/ngccli_linux.zip"
+        # Use -o to overwrite any existing files without prompting
+        unzip -o -q "${tmp_dir}/ngccli_linux.zip" -d "${tmp_dir}"
+
+        print_info "Moving NGC CLI to /opt/ngc-cli..."
+        # Clean up any previous installation attempt
+        if [ -d "/opt/ngc-cli" ]; then
+            sudo rm -rf /opt/ngc-cli
+        fi
+        sudo mv "${tmp_dir}/ngc-cli" /opt/
+        print_info "Creating symbolic link in /usr/local/bin..."
+        sudo ln -sf /opt/ngc-cli/ngc /usr/local/bin/ngc
+        rm -rf "${tmp_dir}"
         print_success "NVIDIA NGC CLI installed."
     else
         print_info "NGC CLI is already installed."
