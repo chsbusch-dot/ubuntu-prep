@@ -366,7 +366,7 @@ install_gemini_cli() {
 
 show_menu() {
     # This function takes the selection array by reference to display the state
-    local -n selections=$1
+    local -n _selections_ref=$1
     local options=(
         "Install Oh My Zsh & Dev Tools (git, tmux, micro)"
         "Install Python Environment"
@@ -383,7 +383,7 @@ show_menu() {
     echo "---------------------------------"
 
     for i in "${!options[@]}"; do
-        if [[ ${selections[$i]} -eq 1 ]]; then
+        if [[ ${_selections_ref[$i]} -eq 1 ]]; then
             echo -e " \e[1;32m[x]\e[0m $((i+1)). ${options[$i]}"
         else
             echo -e " [ ] $((i+1)). ${options[$i]}"
