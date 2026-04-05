@@ -279,54 +279,63 @@ install_nvidia_vgpu() {
 
     read -p "Do you want to configure NGC CLI now? (requires API key) [y/N]: " confirm_ngc
     if [[ "$confirm_ngc" == "y" || "$confirm_ngc" == "Y" ]]; then
-        ngc config set
+        print_info "Please enter your NVIDIA NGC API key. This is the long string that usually starts with 'nvapi-'."
+        read -p "NVIDIA NGC API Key: " ngc_api_key
+        if [[ -n "$ngc_api_key" ]]; then
+            # Set the API key non-interactively to prevent paste errors.
+            ngc config set apikey "$ngc_api_key"
+            print_success "NGC CLI configured successfully."
 
-        read -p "Attempt automatic install of latest vGPU guest driver? (For VMware ESXi) [y/N]: " confirm_vgpu
-        if [[ "$confirm_vgpu" == "y" || "$confirm_vgpu" == "Y" ]]; then
-            print_info "Searching for the latest vGPU guest driver for your OS..."
-            
-            # Get Ubuntu version code like '2204' from '22.04'
-            os_version_code=$(lsb_release -rs | tr -d '.')
+            read -p "Attempt automatic install of latest vGPU guest driver? (For VMware ESXi) [y/N]: " confirm_vgpu
+            if [[ "$confirm_vgpu" == "y" || "$confirm_vgpu" == "Y" ]]; then
+                print_info "Searching for the latest vGPU guest driver for your OS..."
+                
+                # Get Ubuntu version code like '2204' from '22.04'
+                os_version_code=$(lsb_release -rs | tr -d '.')
 
-            # Find the latest driver resource from NGC.
-            # We query for drivers matching our OS, sort them by version (-V), and get the last one (latest).
-            latest_driver_resource=$(ngc registry resource list "nvidia/vgpu/vgpu-for-compute-guest-driver-*-ubuntu${os_version_code}" | \
-                                        grep "vgpu-for-compute-guest-driver" | \
-                                        tr -d '\r' | \
-                                        sort -V | \
-                                        tail -n 1)
+                # Find the latest driver resource from NGC.
+                # We query for drivers matching our OS, sort them by version (-V), and get the last one (latest).
+                latest_driver_resource=$(ngc registry resource list "nvidia/vgpu/vgpu-for-compute-guest-driver-*-ubuntu${os_version_code}" | \
+                                            grep "vgpu-for-compute-guest-driver" | \
+                                            tr -d '\r' | \
+                                            sort -V | \
+                                            tail -n 1)
 
-            if [[ -z "$latest_driver_resource" ]]; then
-                echo "❌ Could not automatically find a vGPU driver for Ubuntu ${os_version_code}."
-                print_info "To find the vGPU driver manually, run:"
-                echo 'ngc registry resource list "nvidia/vgpu/vgpu-for-compute-guest-driver-*"'
-            else
-                print_info "Found latest driver resource: ${latest_driver_resource}"
-                print_info "Downloading... (This may take a while)"
+                if [[ -z "$latest_driver_resource" ]]; then
+                    echo "❌ Could not automatically find a vGPU driver for Ubuntu ${os_version_code}."
+                    print_info "To find the vGPU driver manually, run:"
+                    echo 'ngc registry resource list "nvidia/vgpu/vgpu-for-compute-guest-driver-*"'
+                else
+                    print_info "Found latest driver resource: ${latest_driver_resource}"
+                    print_info "Downloading... (This may take a while)"
 
-                tmp_dir=$(mktemp -d)
-                if ngc registry resource download-version "${latest_driver_resource}" --dest "$tmp_dir"; then
-                    zip_file=$(find "$tmp_dir" -name '*.zip' | head -n 1)
-                    if [[ -n "$zip_file" ]]; then
-                        print_info "Unzipping ${zip_file}..."
-                        unzip -o "$zip_file" -d "$tmp_dir"
+                    tmp_dir=$(mktemp -d)
+                    if ngc registry resource download-version "${latest_driver_resource}" --dest "$tmp_dir"; then
+                        zip_file=$(find "$tmp_dir" -name '*.zip' | head -n 1)
+                        if [[ -n "$zip_file" ]]; then
+                            print_info "Unzipping ${zip_file}..."
+                            unzip -o "$zip_file" -d "$tmp_dir"
 
-                        deb_file=$(find "$tmp_dir" -name '*.deb' | head -n 1)
-                        if [[ -n "$deb_file" ]]; then
-                            print_info "Installing ${deb_file}..."
-                            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
-                            print_success "vGPU driver installed successfully."
+                            deb_file=$(find "$tmp_dir" -name '*.deb' | head -n 1)
+                            if [[ -n "$deb_file" ]]; then
+                                print_info "Installing ${deb_file}..."
+                                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
+                                print_success "vGPU driver installed successfully."
+                            else
+                                echo "❌ Could not find a .deb file in the downloaded archive."
+                            fi
                         else
-                            echo "❌ Could not find a .deb file in the downloaded archive."
+                            echo "❌ Could not find a .zip file in the downloaded resource."
                         fi
                     else
-                        echo "❌ Could not find a .zip file in the downloaded resource."
+                        echo "❌ Failed to download driver from NGC."
                     fi
-                else
-                    echo "❌ Failed to download driver from NGC."
+                    rm -rf "$tmp_dir"
                 fi
-                rm -rf "$tmp_dir"
             fi
+            fi
+        else
+            print_info "Skipping NGC configuration."
         fi
     fi
 }
