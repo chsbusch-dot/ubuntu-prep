@@ -251,37 +251,52 @@ install_nvidia_vgpu() {
     else
         print_info "NGC CLI not found. Performing fresh installation..."
 
-        # Clean up potentially broken symlink from previous attempts
-        sudo rm -f /usr/local/bin/ngc
-
         local tmp_dir
         tmp_dir=$(mktemp -d)
-        print_info "Downloading and extracting NGC CLI to a temporary directory..."
-        wget --content-disposition https://ngc.nvidia.com/downloads/ngccli_linux.zip -qO "${tmp_dir}/ngccli_linux.zip"
-        # Use -o to overwrite any existing files without prompting
-        unzip -o -q "${tmp_dir}/ngccli_linux.zip" -d "${tmp_dir}"
 
-        print_info "Moving NGC CLI to /opt/ngc-cli..."
-        # Clean up any previous installation attempt
-        if [ -d "/opt/ngc-cli" ]; then
-            sudo rm -rf /opt/ngc-cli
-        fi
+        # Use a trap to ensure the temp directory is cleaned up on exit or error
+        trap 'rm -rf -- "$tmp_dir"' EXIT
+
+        local ngc_zip_path="${tmp_dir}/ngccli_linux.zip"
+        local ngc_cli_url="https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/4.16.0/files/ngccli_linux.zip"
+        local ngc_cli_sha256="ce6a54a60c0adf78347fd9851cffefe6b5d8a0b7a2d7134e1b52646f0fd6ff11"
+
+        print_info "Downloading NGC CLI from NVIDIA..."
+        wget "$ngc_cli_url" -qO "$ngc_zip_path"
+
+        print_info "Verifying SHA256 checksum of the downloaded file..."
+        echo "$ngc_cli_sha256  $ngc_zip_path" | sha256sum --check --status
+        print_success "SHA256 checksum is valid."
+
+        print_info "Unzipping the NGC CLI..."
+        unzip -o -q "$ngc_zip_path" -d "$tmp_dir"
+
+        print_info "Verifying MD5 checksums of the unzipped files..."
+        (cd "$tmp_dir" && find ngc-cli/ -type f -exec md5sum {} + | LC_ALL=C sort | md5sum -c ngc-cli.md5)
+        print_success "MD5 checksums are valid."
+
+        print_info "Installing NGC CLI to /opt/ngc-cli..."
+        sudo rm -rf /opt/ngc-cli # Clean up any previous installation
         sudo mv "${tmp_dir}/ngc-cli" /opt/
-        print_info "Adding NGC CLI to system-wide PATH via /etc/profile.d/ngc.sh..."
-        echo 'export PATH="/opt/ngc-cli:$PATH"' | sudo tee /etc/profile.d/ngc.sh > /dev/null
 
-        # Also add to user's shell config files to ensure it's available in new non-login shells
-        local ngc_path_str='export PATH="/opt/ngc-cli:$PATH"'
-        if [ -f "$HOME/.zshrc" ] && ! grep -q "/opt/ngc-cli" "$HOME/.zshrc"; then
-            print_info "Adding NGC CLI path to ~/.zshrc"
-            echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.zshrc"
-        fi
-        if [ -f "$HOME/.bashrc" ] && ! grep -q "/opt/ngc-cli" "$HOME/.bashrc"; then
-            print_info "Adding NGC CLI path to ~/.bashrc"
-            echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.bashrc"
-        fi
-        rm -rf "${tmp_dir}"
-        print_success "NVIDIA NGC CLI installed."
+        # The trap will handle cleanup, but we can be explicit
+        rm -rf -- "$tmp_dir"
+        trap - EXIT # Clear the trap
+
+        print_success "NVIDIA NGC CLI installed and verified."
+    fi
+
+    # Always ensure the user's shell config files are correctly set up.
+    # This makes the script idempotent and self-healing.
+    print_info "Verifying NGC CLI path in shell configuration..."
+    local ngc_path_str='export PATH="/opt/ngc-cli:$PATH"'
+    if [ -f "$HOME/.zshrc" ] && ! grep -q "/opt/ngc-cli" "$HOME/.zshrc"; then
+        print_info "Adding NGC CLI path to ~/.zshrc"
+        echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.zshrc"
+    fi
+    if [ -f "$HOME/.bashrc" ] && ! grep -q "/opt/ngc-cli" "$HOME/.bashrc"; then
+        print_info "Adding NGC CLI path to ~/.bashrc"
+        echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.bashrc"
     fi
 
     # Add the path for the current script session so we can run 'ngc' immediately
