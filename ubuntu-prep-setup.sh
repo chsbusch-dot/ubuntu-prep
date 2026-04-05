@@ -289,8 +289,8 @@ install_nvidia_vgpu() {
     # 1. Try to get key from secrets file
     if [ -f "$HOME/.zshenv_secrets" ]; then
         print_info "Searching for NVIDIA_NGC_API_KEY in ~/.zshenv_secrets..."
-        # Grep for the uncommented export line and extract the value between the quotes
-        ngc_api_key=$(grep -E '^export NVIDIA_NGC_API_KEY=' "$HOME/.zshenv_secrets" | cut -d '"' -f 2 || true)
+        # Use a robust sed command to find an uncommented key and extract the value from between the quotes.
+        ngc_api_key=$(sed -n 's/^[[:space:]]*export[[:space:]]\+NVIDIA_NGC_API_KEY[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/.zshenv_secrets" || true)
     fi
 
     # 2. If not found, prompt user
