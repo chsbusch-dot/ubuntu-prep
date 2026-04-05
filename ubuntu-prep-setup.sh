@@ -333,7 +333,34 @@ install_nvidia_vgpu() {
             print_info "To find the vGPU driver manually, run:"
             echo 'ngc registry resource list "nvidia/vgpu/vgpu-for-compute-guest-driver-*"'
         else
-            # ... (The rest of the driver download logic remains the same)
+            print_info "Found latest driver resource: ${latest_driver_resource}"
+            print_info "Downloading... (This may take a while)"
+
+            local driver_tmp_dir
+            driver_tmp_dir=$(mktemp -d)
+            if ngc registry resource download-version "${latest_driver_resource}" --dest "$driver_tmp_dir"; then
+                local zip_file
+                zip_file=$(find "$driver_tmp_dir" -name '*.zip' | head -n 1)
+                if [[ -n "$zip_file" ]]; then
+                    print_info "Unzipping ${zip_file}..."
+                    unzip -o -q "$zip_file" -d "$driver_tmp_dir"
+
+                    local deb_file
+                    deb_file=$(find "$driver_tmp_dir" -name '*.deb' | head -n 1)
+                    if [[ -n "$deb_file" ]]; then
+                        print_info "Installing ${deb_file}..."
+                        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
+                        print_success "vGPU driver installed successfully."
+                    else
+                        echo "❌ Could not find a .deb file in the downloaded archive."
+                    fi
+                else
+                    echo "❌ Could not find a .zip file in the downloaded resource."
+                fi
+            else
+                echo "❌ Failed to download driver from NGC."
+            fi
+            rm -rf "$driver_tmp_dir"
         fi
     fi
 }
