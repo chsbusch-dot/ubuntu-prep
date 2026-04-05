@@ -290,7 +290,7 @@ install_nvidia_vgpu() {
     if [ -f "$HOME/.zshenv_secrets" ]; then
         print_info "Searching for NVIDIA_NGC_API_KEY in ~/.zshenv_secrets..."
         # Grep for the uncommented export line and extract the value between the quotes
-        ngc_api_key=$(grep "export NVIDIA_NGC_API_KEY" "$HOME/.zshenv_secrets" | grep -v '^#' | cut -d '"' -f 2 || true)
+        ngc_api_key=$(grep -E '^export NVIDIA_NGC_API_KEY=' "$HOME/.zshenv_secrets" | cut -d '"' -f 2 || true)
     fi
 
     # 2. If not found, prompt user
