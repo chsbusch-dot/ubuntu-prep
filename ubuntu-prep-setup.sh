@@ -79,11 +79,14 @@ install_zsh() {
 
     if [ ! -d "$HOME/.oh-my-zsh" ]; then
         print_info "Installing Oh My Zsh..."
-        # The --unattended flag also changes the default shell to zsh without prompting
+        # The --unattended flag prevents the installer from trying to change the shell, so we do it manually.
         sh -c "$(wget https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh -O -)" "" --unattended
     else
         print_info "Oh My Zsh is already installed."
     fi
+
+    print_info "Setting Zsh as the default shell for the current user..."
+    sudo chsh -s "$(which zsh)" "$USER"
 
     # Define Zsh custom plugins directory
     ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
@@ -217,6 +220,12 @@ install_nvm_node() {
 
     print_success "NVM, Node.js, and NPM installed."
     print_info "Node version: $(node -v), NPM version: $(npm -v)"
+    print_info "To use 'nvm', 'node', and 'npm' commands, please open a new terminal or run: source ~/.zshrc"
+    
+    echo -e "\n\e[1;33mIMPORTANT: Your current terminal session does not have the new paths yet.\e[0m"
+    print_info "To use 'nvm', 'node', and 'npm', you must open a new terminal or run the following command:"
+    echo -e "  \e[1;32msource ~/.zshrc\e[0m"
+    print_info "Do NOT use 'sudo apt install npm' as it will conflict with NVM."
 }
 
 # 5. Install NVIDIA vGPU Driver
@@ -350,6 +359,11 @@ install_gemini_cli_only() {
     # Using npm with nvm does not require sudo for global packages
     npm install -g @google/gemini-cli@latest
     print_success "Google Gemini CLI installed."
+    print_info "To use the 'gemini' command, please open a new terminal or run: source ~/.zshrc"
+
+    echo -e "\n\e[1;33mIMPORTANT: Your current terminal session does not have the new paths yet.\e[0m"
+    print_info "To use the 'gemini' command, you must open a new terminal or run the following command:"
+    echo -e "  \e[1;32msource ~/.zshrc\e[0m"
 }
 
 # 10. Install OpenClaw
