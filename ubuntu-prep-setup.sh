@@ -74,8 +74,11 @@ install_base_dependencies() {
 
 # Function to determine the target user for the installation
 determine_target_user() {
-    read -p "Install for current user ($USER) or a different user? [current/different]: " choice
-    if [[ "$choice" == "different" ]]; then
+    echo -e "\n\e[1;36mSelect Target User for Installation:\e[0m"
+    echo "  1. Current user ($USER)"
+    echo "  2. A different/new user"
+    read -p "Your choice [1/2]: " choice
+    if [[ "$choice" == "2" ]]; then
         IS_DIFFERENT_USER=true
         local username
         read -p "Enter the target username [openclawuser]: " username
@@ -269,6 +272,23 @@ install_nvm_node() {
     # We use double quotes to inject TARGET_USER_HOME directly, avoiding any $HOME resolution issues with sudo.
     local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
     sudo -u "$TARGET_USER" bash -c "$nvm_cmd; nvm install --lts"
+
+    print_info "Verifying NVM configuration in shell files..."
+    local nvm_config_str
+    nvm_config_str=$(cat <<'EOF'
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+EOF
+)
+    if [ -f "$TARGET_USER_HOME/.zshrc" ] && ! sudo grep -q 'NVM_DIR' "$TARGET_USER_HOME/.zshrc"; then
+        print_info "Adding NVM configuration to ~/.zshrc"
+        echo -e "\n# NVM Configuration\n${nvm_config_str}" | sudo tee -a "$TARGET_USER_HOME/.zshrc" > /dev/null
+    fi
+    if [ -f "$TARGET_USER_HOME/.bashrc" ] && ! sudo grep -q 'NVM_DIR' "$TARGET_USER_HOME/.bashrc"; then
+        print_info "Adding NVM configuration to ~/.bashrc"
+        echo -e "\n# NVM Configuration\n${nvm_config_str}" | sudo tee -a "$TARGET_USER_HOME/.bashrc" > /dev/null
+    fi
 
     local node_version=$(sudo -u "$TARGET_USER" bash -c "$nvm_cmd; node -v")
     local npm_version=$(sudo -u "$TARGET_USER" bash -c "$nvm_cmd; npm -v")
@@ -565,8 +585,9 @@ print_final_summary() {
     if [[ "$unique_actions" == *"nvm"* ]]; then path_changed=1; fi
 
     if [[ "$unique_actions" == *"docker"* ]]; then
-        print_info "To use Docker without 'sudo', you must LOG OUT and LOG BACK IN."
-        print_info "After logging back in, you can test your installation with: docker run hello-world"
+        print_info "To use Docker without 'sudo' IMMEDIATELY in this terminal, run: newgrp docker"
+        print_info "Otherwise, you must LOG OUT and LOG BACK IN to apply the group change globally."
+        print_info "Then, test your installation with: docker run hello-world"
         echo "" # Newline for spacing
     fi
 
