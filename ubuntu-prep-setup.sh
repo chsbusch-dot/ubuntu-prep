@@ -284,8 +284,8 @@ install_vgpu_driver_from_link() {
 
     print_info "Please provide the direct download URL for the vGPU driver."
     echo -e "\e[1;33mThis must be a direct link that works with curl, not a sharing page.\e[0m"
-    echo "Example of a valid link inside a curl command:"
-    echo 'curl -L "https://drive.usercontent.google.com/download?id=1qrZOFktPq2Z7tnM7YGPIdTPNUT1stZZW&confirm=t" -o filename'
+    print_info "Example of a valid link inside a curl command:"
+    echo 'curl -L "https://drive.usercontent.google.com/download?id=..." -o nvidia.deb'
 
     local vgpu_driver_url=""
     read -p "Enter the direct download URL: " vgpu_driver_url
