@@ -148,8 +148,7 @@ install_zsh() {
 # export OPENAI_API_KEY="your_openai_key"
 # export GOOGLE_API_KEY="your_google_api_key"
 # export CLAUDE_API_KEY="your_claude_key"
-# export NVIDIA_NGC_ORG_ID="your_ngc_org_id"
-# export NVIDIA_NGC_API_KEY="your_ngc_key"
+# export NVIDIA_API_KEY="your_nvidia_api_key"
 EOF
 
     # Add sourcing of .zshenv_secrets to .zshrc
@@ -179,7 +178,7 @@ EOP
                     print_info "Please enter the value for each key. Press Enter to skip a key."
                     keys_to_prompt=(
                         "GITHUB_TOKEN" "AWS_SECRET_ACCESS_KEY" "OPENAI_API_KEY"
-                        "GOOGLE_API_KEY" "CLAUDE_API_KEY" "NVIDIA_NGC_ORG_ID" "NVIDIA_NGC_API_KEY"
+                        "GOOGLE_API_KEY" "CLAUDE_API_KEY" "NVIDIA_API_KEY"
                     )
                     for key_name in "${keys_to_prompt[@]}"; do
                         read -p "Enter value for ${key_name}: " key_value
@@ -264,168 +263,57 @@ install_nvm_node() {
 }
 
 # 5. Install NVIDIA vGPU Driver
-install_nvidia_vgpu() {
-    print_header "Installing NVIDIA vGPU Driver"
-    print_info "Checking NVIDIA NGC CLI installation..."
-
-    # A correct installation is the presence of the executable in /opt/ngc-cli
-    if [[ -f "/opt/ngc-cli/ngc" ]]; then
-        print_info "NGC CLI is already installed in /opt/ngc-cli."
-    else
-        print_info "NGC CLI not found. Performing fresh installation..."
-
-        local tmp_dir
-        tmp_dir=$(mktemp -d)
-
-        # Use a trap to ensure the temp directory is cleaned up on exit or error
-        trap 'rm -rf -- "$tmp_dir"' EXIT
-
-        local ngc_zip_path="${tmp_dir}/ngccli_linux.zip"
-        local ngc_cli_url="https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/4.16.0/files/ngccli_linux.zip"
-        local ngc_cli_sha256="ce6a54a60c0adf78347fd9851cffefe6b5d8a0b7a2d7134e1b52646f0fd6ff11"
-
-        print_info "Downloading NGC CLI from NVIDIA..."
-        wget "$ngc_cli_url" -qO "$ngc_zip_path"
-
-        print_info "Verifying SHA256 checksum of the downloaded file..."
-        echo "$ngc_cli_sha256  $ngc_zip_path" | sha256sum --check --status
-        print_success "SHA256 checksum is valid."
-
-        print_info "Unzipping the NGC CLI..."
-        unzip -o -q "$ngc_zip_path" -d "$tmp_dir"
-
-        print_info "Verifying MD5 checksums of the unzipped files..."
-        (cd "$tmp_dir" && find ngc-cli/ -type f -exec md5sum {} + | LC_ALL=C sort | md5sum -c ngc-cli.md5)
-        print_success "MD5 checksums are valid."
-
-        print_info "Installing NGC CLI to /opt/ngc-cli..."
-        sudo rm -rf /opt/ngc-cli # Clean up any previous installation
-        sudo mv "${tmp_dir}/ngc-cli" /opt/
-
-        # The trap will handle cleanup, but we can be explicit
-        rm -rf -- "$tmp_dir"
-        trap - EXIT # Clear the trap
-
-        print_success "NVIDIA NGC CLI installed and verified."
-    fi
-
-    # Always ensure the user's shell config files are correctly set up.
-    # This makes the script idempotent and self-healing.
-    print_info "Verifying NGC CLI path in shell configuration..."
-    local ngc_path_str='export PATH="/opt/ngc-cli:$PATH"'
-    if [ -f "$HOME/.zshrc" ] && ! grep -qE '^[[:space:]]*export[[:space:]]+PATH=.*"/opt/ngc-cli"' "$HOME/.zshrc"; then
-        print_info "Adding NGC CLI path to ~/.zshrc"
-        echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.zshrc"
-    fi
-    if [ -f "$HOME/.bashrc" ] && ! grep -qE '^[[:space:]]*export[[:space:]]+PATH=.*"/opt/ngc-cli"' "$HOME/.bashrc"; then
-        print_info "Adding NGC CLI path to ~/.bashrc"
-        echo -e "\n# Add NVIDIA NGC CLI to path\n${ngc_path_str}" >> "$HOME/.bashrc"
-    fi
-
-    # Add the path for the current script session so we can run 'ngc' immediately
-    export PATH="/opt/ngc-cli:$PATH"
-    POST_INSTALL_ACTIONS+=("nvm") # Re-use 'nvm' flag to trigger the "new terminal" message
-
-    read -p "Do you want to configure NGC CLI now? (requires API key) [y/N]: " confirm_ngc
-    if [[ "$confirm_ngc" != "y" && "$confirm_ngc" != "Y" ]]; then
-        print_info "Skipping NGC configuration."
+install_vgpu_driver_from_link() {
+    print_header "Installing NVIDIA vGPU Driver from Direct Link"
+    read -p "Do you want to install the vGPU guest driver from a direct link? [y/N]: " confirm_vgpu
+    if [[ "$confirm_vgpu" != "y" && "$confirm_vgpu" != "Y" ]]; then
+        print_info "Skipping vGPU driver installation."
         return 0 # Exit the function gracefully
     fi
 
-    # --- Start NGC Configuration ---
-    print_info "Launching interactive NGC configuration..."
-    
-    local ngc_api_key_found=false
-    local ngc_org_id_found=false
-    
-    if [ -f "$HOME/.zshenv_secrets" ]; then
-        # Check if a key has been set in the secrets file to provide a helpful message.
-        if grep -qE '^[[:space:]]*export[[:space:]]+NVIDIA_NGC_API_KEY=' "$HOME/.zshenv_secrets"; then ngc_api_key_found=true; fi
-        if grep -qE '^[[:space:]]*export[[:space:]]+NVIDIA_NGC_ORG_ID=' "$HOME/.zshenv_secrets"; then ngc_org_id_found=true; fi
+    # !!! IMPORTANT !!!
+    # Replace this placeholder with the direct download link to your vGPU driver .deb or .zip file.
+    local vgpu_driver_url="https://endstationiv.synology.me:5001/sharing/9YVgBZWao"
+
+    if [[ "$vgpu_driver_url" == "https://endstationiv.synology.me:5001/sharing/9YVgBZWao" ]]; then
+        echo "❌ The vGPU driver URL in the script is a placeholder. Please edit the 'install_vgpu_driver_from_link' function and replace it with your direct download link."
+        return 1
     fi
 
-    echo -e "\e[1;33mIMPORTANT: You will be prompted for your NGC CLI configuration.\e[0m"
-    echo -e "\e[1;36mFollow these steps carefully:\e[0m"
-    
-    if [[ "$ngc_api_key_found" == true ]]; then
-        print_info "1. An API key was found in ~/.zshenv_secrets. Please copy it from there and paste it when prompted."
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf -- "$tmp_dir"' EXIT
+
+    local downloaded_file_path="${tmp_dir}/vgpu_driver_download"
+
+    print_info "Downloading vGPU driver from your provided link..."
+    # Use wget, which is generally more robust for different server types.
+    if ! wget --no-check-certificate "$vgpu_driver_url" -O "$downloaded_file_path"; then
+        echo "❌ Failed to download the driver. Please check the URL in the script."
+        return 1
+    fi
+    print_success "Download complete."
+
+    local deb_file=""
+    if [[ "$(file -b --mime-type "$downloaded_file_path")" == "application/zip" ]]; then
+        print_info "Unzipping the downloaded archive..."
+        unzip -o -q "$downloaded_file_path" -d "$tmp_dir"
+        deb_file=$(find "$tmp_dir" -name '*.deb' | head -n 1)
+    elif [[ "$(file -b --mime-type "$downloaded_file_path")" == "application/vnd.debian.binary-package" ]]; then
+        deb_file="$downloaded_file_path"
+    fi
+
+    if [[ -n "$deb_file" ]]; then
+        print_info "Installing driver from ${deb_file}..."
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
+        print_success "vGPU driver installed successfully."
+        POST_INSTALL_ACTIONS+=("reboot")
     else
-        print_info "1. No API key was found in your secrets file. Please have your key ready to paste when prompted."
+        echo "❌ Could not find a .deb file in the downloaded file. Please ensure the link points to a .deb or a .zip containing a .deb."
     fi
 
-    if [[ "$ngc_org_id_found" == true ]]; then
-        print_info "2. An Org ID was found in ~/.zshenv_secrets. Please copy it from there."
-        print_info "   When prompted for 'Enter org [no-org]. Choices: [...]', you MUST type or paste your Org ID. Pressing Enter will NOT work."
-    else
-        print_info "2. No Org ID was found in your secrets file."
-        print_info "   When prompted for 'Enter org [no-org]. Choices: [...]', you MUST type or paste one of the provided choices. Pressing Enter will NOT work."
-    fi
-    
-    print_info "3. For 'Enter team [no-team]', you can usually press Enter to accept the default ('no-team')."
-    print_info "4. For 'Enter ace [no-ace]', you can usually press Enter to accept the default ('no-ace')."
-    print_info "5. For 'Enter CLI output format type [ascii]', you can usually press Enter to accept the default ('ascii')."
-    echo ""
-
-    # Run the interactive setup and let the user handle it.
-    # This is the most reliable method given the tool's complex interactivity.
-    if ngc config set; then
-        print_success "NGC CLI configured successfully."
-        print_info "(A 'grpc_wait_for_shutdown' error may appear, but it is generally safe to ignore if the config was saved.)"
-    else
-        echo "❌ Failed to configure NGC CLI. Please try manually with 'ngc config set'."
-    fi
-
-    # --- Start vGPU Driver Install ---
-    read -p "Attempt automatic install of latest vGPU guest driver? (For VMware ESXi) [y/N]: " confirm_vgpu
-    if [[ "$confirm_vgpu" == "y" || "$confirm_vgpu" == "Y" ]]; then
-        print_info "Searching for the latest vGPU guest driver for your OS..."
-        
-        # Get Ubuntu version code like '2204' from '22.04'
-        os_version_code=$(lsb_release -rs | tr -d '.')
-
-        # Find the latest driver resource from NGC.
-        # We query for drivers matching our OS, sort them by version (-V), and get the last one (latest).
-        latest_driver_resource=$(ngc registry resource list "nvidia/vgpu/vgpu-for-compute-guest-driver-*-ubuntu${os_version_code}" | \
-                                    grep "vgpu-for-compute-guest-driver" | \
-                                    tr -d '\r' | \
-                                    sort -V | \
-                                    tail -n 1)
-
-        if [[ -z "$latest_driver_resource" ]]; then
-            echo "❌ Could not automatically find a vGPU driver for Ubuntu ${os_version_code}."
-            print_info "To find the vGPU driver manually, run:"
-            echo 'ngc registry resource list "nvidia/vgpu/vgpu-for-compute-guest-driver-*"'
-        else
-            print_info "Found latest driver resource: ${latest_driver_resource}"
-            print_info "Downloading... (This may take a while)"
-
-            local driver_tmp_dir
-            driver_tmp_dir=$(mktemp -d)
-            if ngc registry resource download-version "${latest_driver_resource}" --dest "$driver_tmp_dir"; then
-                local zip_file
-                zip_file=$(find "$driver_tmp_dir" -name '*.zip' | head -n 1)
-                if [[ -n "$zip_file" ]]; then
-                    print_info "Unzipping ${zip_file}..."
-                    unzip -o -q "$zip_file" -d "$driver_tmp_dir"
-
-                    local deb_file
-                    deb_file=$(find "$driver_tmp_dir" -name '*.deb' | head -n 1)
-                    if [[ -n "$deb_file" ]]; then
-                        print_info "Installing ${deb_file}..."
-                        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
-                        print_success "vGPU driver installed successfully."
-                    else
-                        echo "❌ Could not find a .deb file in the downloaded archive."
-                    fi
-                else
-                    echo "❌ Could not find a .zip file in the downloaded resource."
-                fi
-            else
-                echo "❌ Failed to download driver from NGC."
-            fi
-            rm -rf "$driver_tmp_dir"
-        fi
-    fi
+    trap - EXIT
+    rm -rf -- "$tmp_dir"
 }
 
 # 6. Install CUDA Toolkit
@@ -683,7 +571,7 @@ main() {
         install_python
         install_docker
         install_nvm_node
-        install_nvidia_vgpu
+        install_vgpu_driver_from_link
         install_cuda_toolkit
         install_container_toolkit
         install_cudnn
