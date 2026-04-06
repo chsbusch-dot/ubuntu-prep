@@ -259,14 +259,16 @@ install_docker() {
 install_nvm_node() {
     print_header "Installing NVM, Node.js (LTS), and NPM"
     print_info "Running the NVM installation script silently..."
+    # This runs the installer as the target user, which updates their .bashrc/.zshrc
     sudo -u "$TARGET_USER" bash -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash'
-    print_info "NVM installation script executed. Sourcing NVM to continue..."
 
     print_info "Installing the latest LTS version of Node.js..."
-    # Run the install as the target user in a login shell to ensure nvm is available
-    sudo -u "$TARGET_USER" -i bash -c 'nvm install --lts'
-    local node_version=$(sudo -u "$TARGET_USER" -i bash -c 'node -v')
-    local npm_version=$(sudo -u "$TARGET_USER" -i bash -c 'npm -v')
+    # Explicitly source NVM within the subshell for immediate use
+    local NVM_LOAD_COMMAND='export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+    sudo -u "$TARGET_USER" -i bash -c "$NVM_LOAD_COMMAND && nvm install --lts"
+
+    local node_version=$(sudo -u "$TARGET_USER" -i bash -c "$NVM_LOAD_COMMAND && node -v")
+    local npm_version=$(sudo -u "$TARGET_USER" -i bash -c "$NVM_LOAD_COMMAND && npm -v")
 
     print_success "NVM, Node.js, and NPM installed."
     print_info "Node version: $node_version, NPM version: $npm_version"
@@ -310,13 +312,10 @@ install_vgpu_driver_from_link() {
     fi
     print_success "Download complete."
 
-    print_info "Setting permissions on the downloaded driver file..."
-    chmod 777 "$downloaded_file_path"
-    print_success "Permissions set to 777."
-
     if [[ -f "$downloaded_file_path" ]]; then
         print_info "Installing driver from ${downloaded_file_path}..."
-        # Use dpkg for local .deb files, then apt-get -f install to fix dependencies.
+        # Use `dpkg -i` which runs as root and avoids the `_apt` user permission
+        # issues that `apt install` can have with local files.
         sudo dpkg -i "$downloaded_file_path" || sudo apt-get -f install -y
         print_success "vGPU driver installed successfully."
         POST_INSTALL_ACTIONS+=("reboot")
@@ -379,20 +378,21 @@ install_cudnn() {
 # 9. Install Google Gemini CLI
 install_gemini_cli_only() {
     print_header "Installing Google Gemini CLI"
-    
+
     # Check if nvm is installed for the target user
-    if ! sudo -u "$TARGET_USER" -i bash -c 'command -v nvm' &> /dev/null; then
+    local NVM_LOAD_COMMAND='export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+    if ! sudo -u "$TARGET_USER" -i bash -c "$NVM_LOAD_COMMAND && command -v nvm" &> /dev/null; then
         echo "❌ NVM is not installed for user '$TARGET_USER'. Please run the 'Install NVM' option first."
         return 1
     fi
 
     print_info "Updating npm to the latest version (globally for the current Node version)..."
-    sudo -u "$TARGET_USER" -i bash -c 'npm install -g npm@latest'
+    sudo -u "$TARGET_USER" -i bash -c "$NVM_LOAD_COMMAND && npm install -g npm@latest"
 
     print_info "Installing Google Gemini CLI..."
     print_info "(Note: npm may show deprecation warnings for sub-dependencies, which are generally safe to ignore)"
-    sudo -u "$TARGET_USER" -i bash -c 'npm install -g @google/gemini-cli@latest'
-
+    sudo -u "$TARGET_USER" -i bash -c "$NVM_LOAD_COMMAND && npm install -g @google/gemini-cli@latest"
+    
     print_success "Google Gemini CLI installed."
     POST_INSTALL_ACTIONS+=("nvm") # Depends on nvm path
 }
