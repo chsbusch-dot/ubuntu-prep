@@ -259,8 +259,8 @@ install_docker() {
 install_nvm_node() {
     print_header "Installing NVM, Node.js (LTS), and NPM"
     print_info "Running the NVM installation script silently..."
-    # This runs the installer as the target user, which updates their .bashrc/.zshrc
-    sudo -u "$TARGET_USER" bash -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash'
+    # This runs the installer as the target user, which updates their .bashrc/.zshrc. Silence its output.
+    sudo -u "$TARGET_USER" bash -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash > /dev/null 2>&1'
 
     print_info "Installing the latest LTS version of Node.js..."
     # Explicitly source NVM within the subshell for immediate use
