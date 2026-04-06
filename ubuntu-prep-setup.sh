@@ -276,7 +276,6 @@ install_nvm_node() {
 # 5. Install NVIDIA vGPU Driver
 install_vgpu_driver_from_link() {
     print_header "Installing NVIDIA vGPU Driver from Direct Link"
-   5
     read -p "Do you want to install the vGPU guest driver from a direct link? [y/N]: " confirm_vgpu
     if [[ "$confirm_vgpu" != "y" && "$confirm_vgpu" != "Y" ]]; then
         print_info "Skipping vGPU driver installation."
