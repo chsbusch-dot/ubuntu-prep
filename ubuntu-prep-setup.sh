@@ -66,6 +66,8 @@ check_os() {
 # Function to install base dependencies for the script to run properly
 install_base_dependencies() {
     print_header "Ensuring Base Dependencies are Installed"
+    # Quietly update package lists to ensure install doesn't fail on a fresh system
+    sudo apt-get update -qq
     # These are required by various installation functions
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y jq build-essential procps curl file git wget unzip lsb-release gnupg ca-certificates
     print_success "Base dependencies are present."
@@ -215,7 +217,7 @@ install_zsh() {
 
     print_info "Adding custom Zsh prompt..."
     # Add custom prompt to override the theme default. Using a heredoc for clarity.
-    sudo bash -c "cat <<'EOP' >> ${TARGET_USER_HOME}/.zshrc
+    cat <<'EOP' | sudo tee -a "${TARGET_USER_HOME}/.zshrc" > /dev/null
 
 # Custom prompt showing user@host > path >
 PROMPT="%{$fg_bold[yellow]%}%n@%m%{$reset_color%} > %{$fg[cyan]%}%/%{$reset_color%} > "
@@ -675,7 +677,6 @@ main() {
     check_not_root
     check_os
     determine_target_user
-    install_base_dependencies
 
     local selections=(0 0 0 0 0 0 0 0 0 0 0 0)
     local installed_state=(0 0 0 0 0 0 0 0 0 0 0 0)
@@ -726,11 +727,19 @@ main() {
     for i in "${!selections[@]}"; do
         if [[ ${selections[$i]} -eq 1 && ${installed_state[$i]} -eq 0 ]]; then
             something_installed=1
-            ${funcs[$i]}
+            break
         fi
     done
 
     if [[ $something_installed -eq 1 ]]; then
+        install_base_dependencies
+        
+        for i in "${!selections[@]}"; do
+            if [[ ${selections[$i]} -eq 1 && ${installed_state[$i]} -eq 0 ]]; then
+                ${funcs[$i]}
+            fi
+        done
+
         print_success "Selected installations are complete."
         print_final_summary
         
