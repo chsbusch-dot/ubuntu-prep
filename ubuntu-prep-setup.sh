@@ -79,8 +79,10 @@ install_base_dependencies() {
 # Function to determine the target user for the installation
 determine_target_user() {
     echo -e "\n\e[1;36mSelect Target User for Installation:\e[0m"
+    echo "This script runs system-wide installations (like Docker, Python, CUDA) using 'sudo'."
+    echo "User-specific tools (like NVM, Oh My Zsh, OpenClaw) will be installed for the user you select below."
     echo "  1. Current user ($USER)"
-    echo "  2. A different/new user"
+    echo "  2. A different/new user (e.g., a dedicated 'openclaw' user)"
     read -p "Your choice [1/2]: " choice
     if [[ "$choice" == "2" ]]; then
         IS_DIFFERENT_USER=true
@@ -149,44 +151,41 @@ EOF
     fi
 
     # Interactive prompt for API keys
-    if [[ "$IS_DIFFERENT_USER" == false ]]; then
-        read -p "Do you want to edit your API keys now? [Y/N]: " add_keys_now
-        if [[ "$add_keys_now" == "y" || "$add_keys_now" == "Y" ]]; then
-            PS3="Please choose how to add your keys: "
-            options=("Enter keys one-by-one" "Edit file manually with nano" "Skip")
-            select opt in "${options[@]}"; do
-                case $opt in
-                    "Enter keys one-by-one")
-                        print_info "Please enter the value for each key. Press Enter to skip a key."
-                        keys_to_prompt=(
-                            "GITHUB_TOKEN" "AWS_SECRET_ACCESS_KEY" "OPENAI_API_KEY"
-                            "GOOGLE_API_KEY" "CLAUDE_API_KEY" "NVIDIA_API_KEY"
-                            "NVIDIA_VGPU_DRIVER_URL" "NVIDIA_VGPU_FTP_AUTH"
-                        )
-                        for key_name in "${keys_to_prompt[@]}"; do
-                            read -p "Enter value for ${key_name}: " key_value
-                            if [[ -n "$key_value" ]]; then
-                                sed -i "s|# export ${key_name}=.*|export ${key_name}=\"${key_value}\"|" "$TARGET_USER_HOME/.env.secrets"
-                            fi
-                        done
-                        print_success "API keys have been saved to ~/.env.secrets."
-                        break
-                        ;;
-                    "Edit file manually with nano")
-                        print_info "Opening ~/.env.secrets with nano. Save with Ctrl+X, then Y, then Enter."
-                        nano "$TARGET_USER_HOME/.env.secrets"
-                        print_success "Finished editing secrets file."
-                        break
-                        ;;
-                    "Skip")
-                        break
-                        ;;
-                    *) echo "Invalid option $REPLY";;
-                esac
-            done
-        fi
-    else
-        print_info "Skipping interactive API key entry. Please configure for '$TARGET_USER' manually."
+    print_info "API keys configuration file is ready at $TARGET_USER_HOME/.env.secrets"
+    read -p "Do you want to edit your API keys for '$TARGET_USER' now? [y/N]: " add_keys_now
+    if [[ "$add_keys_now" == "y" || "$add_keys_now" == "Y" ]]; then
+        PS3="Please choose how to add your keys: "
+        options=("Enter keys one-by-one" "Edit file manually with nano" "Skip")
+        select opt in "${options[@]}"; do
+            case $opt in
+                "Enter keys one-by-one")
+                    print_info "Please enter the value for each key. Press Enter to skip a key."
+                    keys_to_prompt=(
+                        "GITHUB_TOKEN" "AWS_SECRET_ACCESS_KEY" "OPENAI_API_KEY"
+                        "GOOGLE_API_KEY" "CLAUDE_API_KEY" "NVIDIA_API_KEY"
+                        "NVIDIA_VGPU_DRIVER_URL" "NVIDIA_VGPU_FTP_AUTH"
+                    )
+                    for key_name in "${keys_to_prompt[@]}"; do
+                        read -p "Enter value for ${key_name}: " key_value
+                        if [[ -n "$key_value" ]]; then
+                            sudo -u "$TARGET_USER" sed -i "s|# export ${key_name}=.*|export ${key_name}=\"${key_value}\"|" "$TARGET_USER_HOME/.env.secrets"
+                        fi
+                    done
+                    print_success "API keys have been saved to $TARGET_USER_HOME/.env.secrets."
+                    break
+                    ;;
+                "Edit file manually with nano")
+                    print_info "Opening $TARGET_USER_HOME/.env.secrets with nano. Save with Ctrl+X, then Y, then Enter."
+                    sudo -u "$TARGET_USER" nano "$TARGET_USER_HOME/.env.secrets"
+                    print_success "Finished editing secrets file."
+                    break
+                    ;;
+                "Skip")
+                    break
+                    ;;
+                *) echo "Invalid option $REPLY";;
+            esac
+        done
     fi
 }
 
@@ -199,7 +198,7 @@ install_zsh() {
     if [ ! -d "$TARGET_USER_HOME/.oh-my-zsh" ]; then
         print_info "Installing Oh My Zsh..."
         # The --unattended flag prevents the installer from trying to change the shell, so we do it manually.
-        sudo -u "$TARGET_USER" sh -c "$(wget https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh -O -)" "" --unattended
+        sudo -u "$TARGET_USER" sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
     else
         print_info "Oh My Zsh is already installed."
     fi
@@ -305,7 +304,7 @@ install_nvm_node() {
     # Explicitly set NVM_DIR using the exact target path and source nvm.sh within the subshell.
     # We use double quotes to inject TARGET_USER_HOME directly, avoiding any $HOME resolution issues with sudo.
     local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
-    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; nvm install --lts"
+    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; nvm install --lts; nvm install-latest-npm"
 
     print_info "Verifying NVM configuration in shell files..."
     local nvm_config_str
@@ -499,19 +498,29 @@ install_gemini_cli_only() {
     POST_INSTALL_ACTIONS+=("nvm") # Depends on nvm path
 }
 
-# 10. Install OpenClaw
+# 11. Install OpenClaw
 install_openclaw() {
     print_header "Installing OpenClaw"
+
+    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+
+    # Check if node is installed for the target user.
+    if ! sudo -u "$TARGET_USER" bash -c "$nvm_cmd; command -v node" &> /dev/null; then
+        echo "❌ Node.js is not installed for user '$TARGET_USER'. OpenClaw requires Node.js to install without sudo."
+        echo "Please run the 'Install NVM, Node.js & NPM' option first."
+        return 1
+    fi
 
     print_info "Enabling user lingering to allow services to run after logout..."
     sudo loginctl enable-linger "$TARGET_USER"
 
     print_info "Installing OpenClaw..."
-    sudo -u "$TARGET_USER" -i bash -c 'curl -fsSL https://openclaw.ai/install.sh | bash'
+    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; curl -fsSL https://openclaw.ai/install.sh | bash"
 
     print_info "Onboarding OpenClaw and installing daemon..."
-    # Run as the target user in a login shell. This sets XDG_RUNTIME_DIR and PATH correctly.
-    sudo -u "$TARGET_USER" -i bash -c 'openclaw onboard --install-daemon'
+    # Run as the target user, explicitly sourcing NVM so Node is available.
+    # We also need to ensure ~/.local/bin is in the PATH for the openclaw command.
+    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; export PATH=\"\$HOME/.local/bin:\$PATH\"; export XDG_RUNTIME_DIR=\"/run/user/\$(id -u)\"; openclaw onboard --install-daemon"
 
     local openclaw_config="$TARGET_USER_HOME/.openclaw/openclaw.json"
     if [ -f "$openclaw_config" ]; then
@@ -750,6 +759,7 @@ show_menu() {
     clear
     echo -e "\n\e[1;35m--- Ubuntu Prep Script Menu ---\e[0m"
     echo -e "Hardware: $GPU_STATUS"
+    echo -e "Target User: \e[1;36m$TARGET_USER\e[0m ($TARGET_USER_HOME)"
     echo "Use numbers [1-12] to toggle an option. Press 'a' to select all."
     echo "Press 'i' to install selected, or 'q' to quit."
     echo "---------------------------------"
