@@ -233,6 +233,7 @@ update_system() {
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
     print_success "System updated and upgraded."
+    sleep 2 # Pause briefly so the user can see that it executed
 }
 
 # 1. Install Python
@@ -538,45 +539,45 @@ check_installations() {
         installed_state[4]=1
     fi
 
-    # 5. vGPU Driver (index 5)
-    if command -v nvidia-smi &> /dev/null; then
-        print_info "Found existing NVIDIA driver (nvidia-smi)."
+    # 5. Homebrew (index 5)
+    if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+        print_info "Found existing Homebrew installation."
         installed_state[5]=1
     fi
 
-    # 6. CUDA Toolkit (index 6)
-    if [ -f "/usr/local/cuda/bin/nvcc" ]; then
-        print_info "Found existing CUDA Toolkit."
+    # 6. Gemini CLI (index 6)
+    if sudo bash -c "ls $TARGET_USER_HOME/.nvm/versions/node/*/bin/gemini" &> /dev/null; then
+        print_info "Found existing Gemini CLI installation."
         installed_state[6]=1
     fi
 
-    # 7. NVIDIA Container Toolkit (index 7)
-    if dpkg -l | grep -q 'nvidia-container-toolkit'; then
-        print_info "Found existing NVIDIA Container Toolkit."
+    # 7. vGPU Driver (index 7)
+    if command -v nvidia-smi &> /dev/null; then
+        print_info "Found existing NVIDIA driver (nvidia-smi)."
         installed_state[7]=1
     fi
 
-    # 8. cuDNN (index 8)
-    if dpkg -l | grep -q 'cudnn9-cuda-13'; then
-        print_info "Found existing cuDNN installation."
+    # 8. CUDA Toolkit (index 8)
+    if [ -f "/usr/local/cuda/bin/nvcc" ]; then
+        print_info "Found existing CUDA Toolkit."
         installed_state[8]=1
     fi
 
-    # 9. Gemini CLI (index 9)
-    if sudo bash -c "ls $TARGET_USER_HOME/.nvm/versions/node/*/bin/gemini" &> /dev/null; then
-        print_info "Found existing Gemini CLI installation."
+    # 9. NVIDIA Container Toolkit (index 9)
+    if dpkg -l | grep -q 'nvidia-container-toolkit'; then
+        print_info "Found existing NVIDIA Container Toolkit."
         installed_state[9]=1
     fi
 
-    # 10. OpenClaw (index 10)
-    if [ -f "$TARGET_USER_HOME/.local/bin/openclaw" ]; then
-        print_info "Found existing OpenClaw installation."
+    # 10. cuDNN (index 10)
+    if dpkg -l | grep -q 'cudnn9-cuda-13'; then
+        print_info "Found existing cuDNN installation."
         installed_state[10]=1
     fi
 
-    # 11. Homebrew (index 11)
-    if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
-        print_info "Found existing Homebrew installation."
+    # 11. OpenClaw (index 11)
+    if [ -f "$TARGET_USER_HOME/.local/bin/openclaw" ]; then
+        print_info "Found existing OpenClaw installation."
         installed_state[11]=1
     fi
 }
@@ -639,6 +640,18 @@ print_final_summary() {
 # --- Main Menu ---
 
 show_menu() {
+    # Hardware check for NVIDIA GPU/vGPU
+    local gpu_status="\e[1;33mChecking...\e[0m"
+    if command -v lspci &> /dev/null; then
+        if lspci | grep -iq 'nvidia'; then
+            gpu_status="\e[1;32mNVIDIA GPU/vGPU Detected\e[0m"
+        else
+            gpu_status="\e[1;33mNo NVIDIA GPU/vGPU Detected\e[0m"
+        fi
+    else
+        gpu_status="\e[1;33mNVIDIA GPU status unknown (pciutils missing)\e[0m"
+    fi
+
     # This function takes the selection array by reference to display the state
     local options=(
         "Update System Packages (apt update && upgrade)"
@@ -646,17 +659,18 @@ show_menu() {
         "Install Python Environment"
         "Install Docker and Docker Compose"
         "Install NVM, Node.js & NPM"
+        "Install Homebrew"
+        "Install Google Gemini CLI"
         "Install NVIDIA vGPU Driver"
         "Install CUDA Toolkit"
         "Install NVIDIA Container Toolkit"
         "Install cuDNN"
-        "Install Google Gemini CLI"
         "Install OpenClaw"
-        "Install Homebrew"
     )
 
     clear
     echo -e "\n\e[1;35m--- Ubuntu Prep Script Menu ---\e[0m"
+    echo -e "Hardware: $gpu_status"
     echo "Use numbers [1-12] to toggle an option. Press 'a' to select all."
     echo "Press 'i' to install selected, or 'q' to quit."
     echo "---------------------------------"
@@ -686,13 +700,13 @@ main() {
         install_python
         install_docker
         install_nvm_node
+        install_homebrew
+        install_gemini_cli_only
         install_vgpu_driver_from_link
         install_cuda_toolkit
         install_container_toolkit
         install_cudnn
-        install_gemini_cli_only
         install_openclaw
-        install_homebrew
     )
 
     check_installations
