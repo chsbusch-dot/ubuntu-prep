@@ -107,7 +107,7 @@ setup_env_secrets() {
     print_header "Configuring API Keys"
     if [ ! -f "$TARGET_USER_HOME/.env.secrets" ]; then
         print_info "Creating ~/.env.secrets template for API keys..."
-        sudo -u "$TARGET_USER" bash -c "cat <<'EOF' > $TARGET_USER_HOME/.env.secrets
+        cat <<'EOF' | sudo -u "$TARGET_USER" tee "$TARGET_USER_HOME/.env.secrets" > /dev/null
 # This file is for storing secrets and API keys.
 # It is sourced by your shell configuration if it exists.
 # Make sure this file is NOT committed to version control.
@@ -115,13 +115,13 @@ setup_env_secrets() {
 # --- API Key Placeholders ---
 # Uncomment and fill in the values for the services you use.
 
-# export GITHUB_TOKEN=\"your_github_token\"
-# export AWS_SECRET_ACCESS_KEY=\"your_aws_secret\"
-# export OPENAI_API_KEY=\"your_openai_key\"
-# export GOOGLE_API_KEY=\"your_google_api_key\"
-# export CLAUDE_API_KEY=\"your_claude_key\"
-# export NVIDIA_API_KEY=\"your_nvidia_api_key\"
-EOF"
+# export GITHUB_TOKEN="your_github_token"
+# export AWS_SECRET_ACCESS_KEY="your_aws_secret"
+# export OPENAI_API_KEY="your_openai_key"
+# export GOOGLE_API_KEY="your_google_api_key"
+# export CLAUDE_API_KEY="your_claude_key"
+# export NVIDIA_API_KEY="your_nvidia_api_key"
+EOF
     fi
 
     if [ -f "$TARGET_USER_HOME/.bashrc" ] && ! sudo grep -q ".env.secrets" "$TARGET_USER_HOME/.bashrc"; then
@@ -238,7 +238,7 @@ update_system() {
 # 1. Install Python
 install_python() {
     print_header "Installing Python and Virtual Environment Tools"
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-dev python3-venv libssl-dev libffi-dev python3-setuptools
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python-is-python3 python3-pip python3-dev python3-venv libssl-dev libffi-dev python3-setuptools
     print_success "Python environment installed."
 }
 
