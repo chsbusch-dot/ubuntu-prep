@@ -21,6 +21,7 @@ TARGET_USER_HOME=""
 IS_DIFFERENT_USER=false
 HAS_NVIDIA_GPU=false
 GPU_STATUS=""
+LLM_BACKEND_CHOICE=""
 
 # --- Helper Functions ---
 
@@ -154,6 +155,7 @@ setup_env_secrets() {
 # export NVIDIA_VGPU_DRIVER_URL="ftp://192.168.1.31/shared/.../nvidia.deb"
 # export NVIDIA_VGPU_FTP_AUTH="admin:password"
 EOF
+        sudo chmod 600 "$TARGET_USER_HOME/.env.secrets"
     fi
 
     if [ -f "$TARGET_USER_HOME/.bashrc" ] && ! sudo grep -q ".env.secrets" "$TARGET_USER_HOME/.bashrc"; then
@@ -634,49 +636,68 @@ EOF
     sudo ufw allow 22/tcp # Ensure SSH access is not blocked
     sudo ufw allow 18789/tcp # Allow OpenClaw gateway access
     print_success "UFW rules configured."
-    echo -e "\e[1;33mIMPORTANT: The firewall has been configured but is NOT enabled by default.\e[0m"
-    print_info "To enable the firewall, you can run: sudo ufw enable"
 
     print_success "OpenClaw installation complete."
-    POST_INSTALL_ACTIONS+=("nvm") # Modifies path, needs same action as nvm
+    POST_INSTALL_ACTIONS+=("nvm" "ufw") # Modifies path, needs same action as nvm
 }
 
 # 12. Install Local LLM Support (Ollama, llama.cpp, Open-WebUI)
 install_local_llm() {
     print_header "Installing Local LLM Stack"
     
-    echo -e "\e[1;36mSelect components to install:\e[0m"
-    read -p "1. Install llama.cpp (build from source with CUDA)? [y/N]: " install_llamacpp
-    read -p "2. Install Ollama? [y/N]: " install_ollama
-    read -p "3. Install Open-WebUI (requires Docker & NVIDIA CTK)? [y/N]: " install_openwebui
+    local install_llamacpp_cpu="n"
+    local install_llamacpp_cuda="n"
+    local install_ollama="n"
 
-    if [[ "$install_llamacpp" == "y" || "$install_llamacpp" == "Y" ]]; then
+    case "$LLM_BACKEND_CHOICE" in
+        "ollama") install_ollama="y" ;;
+        "llama_cpu") install_llamacpp_cpu="y" ;;
+        "llama_cuda") install_llamacpp_cuda="y" ;;
+        *) install_ollama="y" ;; # Default fallback
+    esac
+
+    read -p "Install Open-WebUI (requires Docker & NVIDIA CTK)? [y/N]: " install_openwebui
+
+    if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
         print_info "Installing build dependencies for llama.cpp..."
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake
         
-        echo -e "\n\e[1;33m1. Lookup the Compute Capability of your NVIDIA devices:\e[0m"
-        echo "   CUDA: Your GPU Compute > https://developer.nvidia.com/cuda-gpus"
-        read -p "Enter compute capability as integer [86]: " compute_cap
-        compute_cap=${compute_cap:-86}
+        local cmake_flags="-DGGML_NATIVE=OFF"
+        local export_cmd=""
 
-        print_info "Cloning and building llama.cpp with CUDA support..."
+        if [[ "$install_llamacpp_cuda" == "y" ]]; then
+            echo -e "\n\e[1;33m1. Lookup the Compute Capability of your NVIDIA devices:\e[0m"
+            echo "   CUDA: Lookup Your GPU Compute > https://developer.nvidia.com/cuda-gpus and enter as digitswithout separator (8.6 -> 86)"
+            read -p "Enter compute capability as integer [86]: " compute_cap
+            compute_cap=${compute_cap:-86}
+            cmake_flags="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=\"$compute_cap\""
+            export_cmd="export PATH=\"/usr/local/cuda/bin:\$PATH\"; export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:\$LD_LIBRARY_PATH\";"
+            print_info "Cloning and building llama.cpp with CUDA support..."
+        else
+            print_info "Cloning and building llama.cpp with CPU support..."
+        fi
+
         sudo -u "$TARGET_USER" bash -c "
             cd \"$TARGET_USER_HOME\"
             if [ ! -d llama.cpp ]; then
                 git clone https://github.com/ggerganov/llama.cpp
             fi
             cd llama.cpp
-            export PATH=\"/usr/local/cuda/bin:\$PATH\"
-            export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:\$LD_LIBRARY_PATH\"
-            cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=\"$compute_cap\"
+            $export_cmd
+            cmake -B build $cmake_flags
             cmake --build build --config Release
         "
         print_success "llama.cpp built successfully."
         
         echo ""
-        print_info "To run the server, use a command like this (hiding the first compute device if needed):"
-        echo 'CUDA_VISIBLE_DEVICES="-0" ./llama.cpp/build/bin/llama-server --model /srv/models/llama.gguf'
+        if [[ "$install_llamacpp_cuda" == "y" ]]; then
+            print_info "To run the server, use a command like this (hiding the first compute device if needed):"
+            echo 'CUDA_VISIBLE_DEVICES="-0" ./llama.cpp/build/bin/llama-server --model /srv/models/llama.gguf'
+        else
+            print_info "To run the server, use a command like this:"
+            echo './llama.cpp/build/bin/llama-server --model /srv/models/llama.gguf'
+        fi
     fi
 
     if [[ "$install_ollama" == "y" || "$install_ollama" == "Y" ]]; then
@@ -786,67 +807,67 @@ check_installations() {
     # 1. Zsh (index 1)
     if [ -d "$TARGET_USER_HOME/.oh-my-zsh" ]; then
         print_info "Found existing Oh My Zsh installation."
-        installed_state[1]=1
+        MASTER_INSTALLED_STATE[1]=1
     fi
 
     # 2. Python (index 2)
     if command -v python3 &> /dev/null && command -v pip3 &> /dev/null; then
         print_info "Found existing Python installation."
-        installed_state[2]=1
+        MASTER_INSTALLED_STATE[2]=1
     fi
 
     # 3. Docker (index 3)
     if command -v docker &> /dev/null && groups "$TARGET_USER" | grep -q '\bdocker\b'; then
         print_info "Found existing Docker installation and user configuration."
-        installed_state[3]=1
+        MASTER_INSTALLED_STATE[3]=1
     fi
 
     # 4. NVM/Node (index 4)
     if sudo test -s "$TARGET_USER_HOME/.nvm/nvm.sh" && sudo find "$TARGET_USER_HOME/.nvm" -name "node" -type f -executable 2>/dev/null | grep -q .; then
         print_info "Found existing NVM and Node.js installation."
-        installed_state[4]=1
+        MASTER_INSTALLED_STATE[4]=1
     fi
 
     # 5. Homebrew (index 5)
     if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
         print_info "Found existing Homebrew installation."
-        installed_state[5]=1
+        MASTER_INSTALLED_STATE[5]=1
     fi
 
     # 6. Gemini CLI (index 6)
     if sudo find "$TARGET_USER_HOME/.nvm" -name "gemini" 2>/dev/null | grep -q .; then
         print_info "Found existing Gemini CLI installation."
-        installed_state[6]=1
+        MASTER_INSTALLED_STATE[6]=1
     fi
 
     # 7. vGPU Driver (index 7)
     if command -v nvidia-smi &> /dev/null; then
         print_info "Found existing NVIDIA driver (nvidia-smi)."
-        installed_state[7]=1
+        MASTER_INSTALLED_STATE[7]=1
     fi
 
     # 8. CUDA Toolkit (index 8)
     if [ -f "/usr/local/cuda/bin/nvcc" ]; then
         print_info "Found existing CUDA Toolkit."
-        installed_state[8]=1
+        MASTER_INSTALLED_STATE[8]=1
     fi
 
     # 9. NVIDIA Container Toolkit (index 9)
     if dpkg -l | grep -q 'nvidia-container-toolkit'; then
         print_info "Found existing NVIDIA Container Toolkit."
-        installed_state[9]=1
+        MASTER_INSTALLED_STATE[9]=1
     fi
 
     # 10. cuDNN (index 10)
     if dpkg -l | grep -q 'cudnn9-cuda-13'; then
         print_info "Found existing cuDNN installation."
-        installed_state[10]=1
+        MASTER_INSTALLED_STATE[10]=1
     fi
 
     # 11. OpenClaw (index 11)
     if [ -f "$TARGET_USER_HOME/.local/bin/openclaw" ]; then
         print_info "Found existing OpenClaw installation."
-        installed_state[11]=1
+        MASTER_INSTALLED_STATE[11]=1
     fi
 
     # 12. Local LLM Stack (index 12)
@@ -856,7 +877,7 @@ check_installations() {
     if ! sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then llm_installed=0; fi
     if [[ $llm_installed -eq 1 ]]; then
         print_info "Found existing Local LLM Stack (Ollama, llama.cpp, Open-WebUI)."
-        installed_state[12]=1
+        MASTER_INSTALLED_STATE[12]=1
     fi
 }
 
@@ -947,53 +968,42 @@ print_final_summary() {
 # --- Main Menu ---
 
 show_menu() {
-    # This function takes the selection array by reference to display the state
-    local options=(
-        "Update System Packages (apt update && upgrade)"
-        "Install Oh My Zsh & Dev Tools (git, tmux, micro)"
-        "Install Python Environment"
-        "Install Docker and Docker Compose"
-        "Install NVM, Node.js & NPM"
-        "Install Homebrew"
-        "Install Google Gemini CLI"
-        "Install NVIDIA vGPU Driver"
-        "Install CUDA Toolkit"
-        "Install NVIDIA Container Toolkit"
-        "Install cuDNN"
-        "Install OpenClaw"
-        "Install Local LLM Support (Ollama, llama.cpp, Open-WebUI)"
-    )
+    UI_TO_MASTER=()
+    local ui_num=1
+    local menu_body=""
+
+    for master_index in "${ACTIVE_INDICES[@]}"; do
+        # Hide NVIDIA options (indices 7 to 10) if no GPU is detected
+        if [[ "$HAS_NVIDIA_GPU" == false ]] && [[ $master_index -ge 7 && $master_index -le 10 ]]; then
+            continue
+        fi
+
+        # Visual grouping
+        if [[ $master_index -eq 7 && "$HAS_NVIDIA_GPU" == true ]]; then menu_body+="\n"; fi
+        if [[ $master_index -eq 12 ]]; then menu_body+="\n"; fi
+
+        local line=""
+        if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 1 ]]; then
+            line=" \e[1;36m[✓]\e[0m ${ui_num}. ${MASTER_OPTIONS[$master_index]}"
+        elif [[ ${MASTER_SELECTIONS[$master_index]} -eq 1 ]]; then
+            line=" \e[1;32m[x]\e[0m ${ui_num}. ${MASTER_OPTIONS[$master_index]}"
+        else
+            line=" [ ] ${ui_num}. ${MASTER_OPTIONS[$master_index]}"
+        fi
+        menu_body+="$line\n"
+        
+        UI_TO_MASTER[$ui_num]=$master_index
+        ((ui_num++))
+    done
 
     clear
     echo -e "\n\e[1;35m--- Ubuntu Prep Script Menu ---\e[0m"
     echo -e "Hardware: $GPU_STATUS"
     echo -e "Target User: \e[1;36m$TARGET_USER\e[0m ($TARGET_USER_HOME)"
-    echo "Use numbers [1-13] to toggle an option. Press 'a' to select all."
+    echo "Use numbers [1-$((ui_num-1))] to toggle an option. Press 'a' to select all."
     echo "Press 'i' to install selected, or 'q' to quit."
     echo "---------------------------------"
-
-    for i in "${!options[@]}"; do
-        # Hide NVIDIA options (indices 7 to 10) if no GPU is detected
-        if [[ "$HAS_NVIDIA_GPU" == false ]] && [[ $i -ge 7 && $i -le 10 ]]; then
-            continue
-        fi
-
-        if [[ $i -eq 7 && "$HAS_NVIDIA_GPU" == true ]]; then
-            echo "" # Empty line before option 8
-        fi
-
-        if [[ ${installed_state[i]} -eq 1 ]]; then
-            echo -e " \e[1;36m[✓]\e[0m $((i+1)). ${options[$i]}"
-        elif [[ ${selections[i]} -eq 1 ]]; then
-            echo -e " \e[1;32m[x]\e[0m $((i+1)). ${options[$i]}"
-        else
-            echo -e " [ ] $((i+1)). ${options[$i]}"
-        fi
-
-        if [[ $i -eq 10 && "$HAS_NVIDIA_GPU" == true ]]; then
-            echo "" # Empty line after the NVIDIA block (option 11)
-        fi
-    done
+    echo -e -n "$menu_body"
     echo "---------------------------------"
 }
 
@@ -1035,7 +1045,26 @@ main() {
             elif [[ ${installed_state[index]} -eq 1 ]]; then
                 echo -e "\nOption $((choice)) is already installed." && sleep 1
             else
+                # Sub-menu for Local LLM Stack (index 12)
+                if [[ $index -eq 12 && ${selections[12]} -eq 0 ]]; then
+                    echo -e "\n\e[1;36mSelect Local LLM Backend (Exclusive):\e[0m"
+                    echo "  1. Ollama"
+                    echo "  2. llama.cpp with CPU"
+                    echo "  3. llama.cpp with CUDA"
+                    read -p "Your choice [1-3]: " llm_choice
+                    case "$llm_choice" in
+                        1) LLM_BACKEND_CHOICE="ollama" ;;
+                        2) LLM_BACKEND_CHOICE="llama_cpu" ;;
+                        3) LLM_BACKEND_CHOICE="llama_cuda" ;;
+                        *) echo -e "\nInvalid choice. Cancelling option 13." && sleep 1; continue ;;
+                    esac
+                fi
+
                 selections[index]=$((1 - selections[index]))
+
+                if [[ $index -eq 12 && ${selections[12]} -eq 0 ]]; then
+                    LLM_BACKEND_CHOICE=""
+                fi
 
                 # Dependency logic: Gemini CLI (index 6) and OpenClaw (index 11) require NVM (index 4)
                 if [[ ($index -eq 6 || $index -eq 11) && ${selections[$index]} -eq 1 && ${installed_state[4]} -eq 0 ]]; then
@@ -1056,7 +1085,7 @@ main() {
                 if [[ $index -eq 12 && ${selections[12]} -eq 1 ]]; then
                     local auto_selected=""
                     if [[ ${selections[3]} -eq 0 && ${installed_state[3]} -eq 0 ]]; then selections[3]=1; auto_selected+="Docker, "; fi
-                    if [[ "$HAS_NVIDIA_GPU" == true && ${selections[8]} -eq 0 && ${installed_state[8]} -eq 0 ]]; then selections[8]=1; auto_selected+="CUDA Toolkit, "; fi
+                    if [[ "$LLM_BACKEND_CHOICE" == "llama_cuda" && "$HAS_NVIDIA_GPU" == true && ${selections[8]} -eq 0 && ${installed_state[8]} -eq 0 ]]; then selections[8]=1; auto_selected+="CUDA Toolkit, "; fi
                     if [[ "$HAS_NVIDIA_GPU" == true && ${selections[9]} -eq 0 && ${installed_state[9]} -eq 0 ]]; then selections[9]=1; auto_selected+="NVIDIA CTK, "; fi
                     if [[ -n "$auto_selected" ]]; then
                         echo -e "\n[Auto-selected] ${auto_selected%, } required for Local LLM Stack components." && sleep 2
@@ -1068,7 +1097,10 @@ main() {
                 if [[ "$HAS_NVIDIA_GPU" == false ]] && [[ $i -ge 7 && $i -le 10 ]]; then
                     continue
                 fi
-                if [[ ${installed_state[i]} -eq 0 ]]; then selections[i]=1; fi
+                if [[ ${installed_state[i]} -eq 0 ]]; then 
+                    selections[i]=1
+                    if [[ $i -eq 12 && -z "$LLM_BACKEND_CHOICE" ]]; then LLM_BACKEND_CHOICE="ollama"; fi
+                fi
             done
         elif [[ "$choice" == "i" || "$choice" == "I" ]]; then
             break
@@ -1103,6 +1135,17 @@ main() {
         print_success "Selected installations are complete."
         print_final_summary
         
+        if [[ "${POST_INSTALL_ACTIONS[*]}" == *"ufw"* ]]; then
+            echo -e "\n\e[1;33mIMPORTANT: Firewall rules for OpenClaw have been configured, but UFW is NOT enabled by default.\e[0m"
+            read -p "Do you want to enable the UFW firewall now? (WARNING: Ensure SSH access is allowed if remote) [y/N]: " enable_ufw
+            if [[ "$enable_ufw" == "y" || "$enable_ufw" == "Y" ]]; then
+                sudo ufw --force enable
+                print_success "UFW firewall enabled."
+            else
+                print_info "UFW remains disabled. You can enable it later with: sudo ufw enable"
+            fi
+        fi
+
         echo -e "\n\e[1;32m================================================================\e[0m"
         echo -e "\e[1;32mINSTALLATION COMPLETE!\e[0m"
         echo -e "\e[1;33mPlease run the following command to activate your new environment:\e[0m"
