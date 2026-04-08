@@ -676,7 +676,7 @@ install_local_llm() {
 
         if [[ "$install_llamacpp_cuda" == "y" ]]; then
             echo -e "\n\e[1;33m1. Lookup the Compute Capability of your NVIDIA devices:\e[0m"
-            echo "   CUDA: Lookup Your GPU Compute > https://developer.nvidia.com/cuda-gpus and enter as digitswithout separator (8.6 -> 86)"
+            echo "   CUDA: Lookup Your GPU Compute > https://developer.nvidia.com/cuda-gpus and enter as digits without separator (8.6 -> 86)"
             read -p "Enter compute capability as integer [86]: " compute_cap
             compute_cap=${compute_cap:-86}
             cmake_flags="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=\"$compute_cap\""
