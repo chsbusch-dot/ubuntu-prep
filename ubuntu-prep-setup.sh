@@ -341,14 +341,14 @@ install_vgpu_driver_from_link() {
         return 0 # Exit the function gracefully
     fi
 
-    # Source secrets file if it exists to retrieve URL and Auth
-    if [[ -f "$TARGET_USER_HOME/.env.secrets" ]]; then
-        source "$TARGET_USER_HOME/.env.secrets"
-    fi
+    local vgpu_driver_url=""
+    local ftp_auth=""
 
-    # Strip potential hidden carriage returns (\r) in case the file was saved with Windows line endings (CRLF)
-    local vgpu_driver_url="${NVIDIA_VGPU_DRIVER_URL//$'\r'/}"
-    local ftp_auth="${NVIDIA_VGPU_FTP_AUTH//$'\r'/}"
+    # Read secrets file if it exists to retrieve URL and Auth, using sudo to bypass strict home directory permissions
+    if sudo test -f "$TARGET_USER_HOME/.env.secrets"; then
+        vgpu_driver_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DRIVER_URL\"" | tr -d '\r')
+        ftp_auth=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_FTP_AUTH\"" | tr -d '\r')
+    fi
 
     if [[ -z "$vgpu_driver_url" ]]; then
         print_info "Please provide the direct download URL OR a Google Drive sharing link for the vGPU driver."

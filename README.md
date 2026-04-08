@@ -4,7 +4,8 @@ This script automates the setup and preparation of a fresh Ubuntu LTS system. It
 
 ## Features
 
-- **Interactive Menu**: Choose exactly what you want to install.
+- **Interactive Menu**: Choose exactly what you want to install, with smart dependency auto-selection and detection of already installed tools `[✓]`.
+- **Multi-User Support**: Install user-specific tools to your current user or seamlessly create and configure a new dedicated standard user.
 - **System Initialization**: Updates and upgrades all system packages.
 - **Zsh & Oh My Zsh**: Installs Zsh, Oh My Zsh, and essential plugins (`zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-history-substring-search`).
 - **Developer Tools**: Installs `git`, `tmux`, `curl`, `wget`, and `micro`.
@@ -12,11 +13,12 @@ This script automates the setup and preparation of a fresh Ubuntu LTS system. It
 - **Docker**: Installs the latest versions of Docker CE, Docker Compose, and configures user permissions.
 - **Node.js Environment**: Installs `nvm` (Node Version Manager) and the latest LTS release of Node.js.
 - **NVIDIA Stack**:
-    - Installs the NVIDIA NGC CLI.
-    - Automatically detects and installs the latest NVIDIA vGPU guest drivers for VMware ESXi.
+    - Installs the NVIDIA vGPU guest drivers via direct download URL or Google Drive sharing link.
+    - Optionally installs `btop` and `nvtop` for system and GPU monitoring.
     - Installs the CUDA Toolkit, NVIDIA Container Toolkit, and cuDNN.
+    - Dynamically detects GPU hardware and filters menu options accordingly.
 - **AI/ML Tools**: Installs the Google Gemini CLI and OpenClaw.
-- **Local LLM Support**: Installs `llama.cpp`, `ollama` (with optional external network binding), and the `open-webui` Docker container.
+- **Local LLM Support**: Builds `llama.cpp` from source with CUDA support, installs `ollama` (with optional external network binding), and sets up the `open-webui` Docker container.
 - **Secure Configuration**: Helps create and manage API keys in a separate `.env.secrets` file.
 - **Pre-flight Checks**: Verifies the script is running on Ubuntu and not as the root user.
 
