@@ -299,13 +299,13 @@ install_nvm_node() {
     print_info "Running the NVM installation script silently..."
     # This runs the installer as the target user, which updates their .bashrc/.zshrc.
     # Use -s for curl to silence progress bar, and redirect bash output to /dev/null.
-    sudo -u "$TARGET_USER" bash -c 'curl -s -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash > /dev/null 2>&1'
+    sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && curl -s -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash > /dev/null 2>&1"
 
     print_info "Installing the latest LTS version of Node.js..."
     # Explicitly set NVM_DIR using the exact target path and source nvm.sh within the subshell.
     # We use double quotes to inject TARGET_USER_HOME directly, avoiding any $HOME resolution issues with sudo.
     local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
-    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; nvm install --lts; nvm install-latest-npm"
+    sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && $nvm_cmd; nvm install --lts; nvm install-latest-npm"
 
     print_info "Verifying NVM configuration in shell files..."
     local nvm_config_str
@@ -490,11 +490,11 @@ install_gemini_cli_only() {
     fi
 
     print_info "Updating npm to the latest version (globally for the current Node version)..."
-    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; npm install -g npm@latest"
+    sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && $nvm_cmd; npm install -g npm@latest"
 
     print_info "Installing Google Gemini CLI..."
     print_info "(Note: npm may show deprecation warnings for sub-dependencies, which are generally safe to ignore)"
-    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; npm install -g @google/gemini-cli@latest"
+    sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && $nvm_cmd; npm install -g @google/gemini-cli@latest"
     
     print_success "Google Gemini CLI installed."
     POST_INSTALL_ACTIONS+=("nvm") # Depends on nvm path
@@ -517,12 +517,12 @@ install_openclaw() {
     sudo loginctl enable-linger "$TARGET_USER"
 
     print_info "Installing OpenClaw..."
-    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; curl -fsSL https://openclaw.ai/install.sh | bash"
+    sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && $nvm_cmd; curl -fsSL https://openclaw.ai/install.sh | bash"
 
     print_info "Onboarding OpenClaw and installing daemon..."
     # Run as the target user, explicitly sourcing NVM so Node is available.
     # We also need to ensure ~/.local/bin is in the PATH for the openclaw command.
-    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; export PATH=\"\$HOME/.local/bin:\$PATH\"; export XDG_RUNTIME_DIR=\"/run/user/\$(id -u)\"; openclaw onboard --install-daemon"
+    sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && $nvm_cmd; export PATH=\"\$HOME/.local/bin:\$PATH\"; export XDG_RUNTIME_DIR=\"/run/user/\$(id -u)\"; openclaw onboard --install-daemon"
 
     local openclaw_config="$TARGET_USER_HOME/.openclaw/openclaw.json"
     if [ -f "$openclaw_config" ]; then
