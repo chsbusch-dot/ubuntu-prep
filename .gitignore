@@ -1,0 +1,4 @@
+# Ignore local secrets files
+.gitignore 
+.env.secrets
+test-ubuntu-prep.sh

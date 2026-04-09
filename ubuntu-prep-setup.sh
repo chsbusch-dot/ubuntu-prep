@@ -394,26 +394,37 @@ install_gemini_cli_only() {
 
 # 7. Install NVIDIA vGPU Driver
 install_vgpu_driver_from_link() {
-    print_header "Installing NVIDIA vGPU Driver from Direct Link"
-    read -p "Do you want to install the vGPU guest driver from a direct link? [y/N]: " confirm_vgpu
+    print_header "Installing NVIDIA vGPU Driver and Token"
+    read -p "Do you want to install the vGPU guest driver? [y/N]: " confirm_vgpu
     if [[ "$confirm_vgpu" != "y" && "$confirm_vgpu" != "Y" ]]; then
         print_info "Skipping vGPU driver installation."
         return 0 # Exit the function gracefully
     fi
 
     local vgpu_driver_url=""
+    local vgpu_token_url=""
     local ftp_auth=""
+    local env_driver_url=""
+    local env_token_url=""
 
     # Read secrets file if it exists to retrieve URL and Auth, using sudo to bypass strict home directory permissions
     if sudo test -f "$TARGET_USER_HOME/.env.secrets"; then
-        vgpu_driver_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DRIVER_URL\"" | tr -d '\r')
+        env_driver_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DRIVER_URL\"" | tr -d '\r')
+        env_token_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_TOKEN_URL\"" | tr -d '\r')
         ftp_auth=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_FTP_AUTH\"" | tr -d '\r')
+    fi
+
+    if [[ -n "$env_driver_url" ]]; then
+        read -p "Found default driver URL in .env.secrets. Use this? [Y/n]: " use_default_driver
+        if [[ "$use_default_driver" != "n" && "$use_default_driver" != "N" ]]; then
+            vgpu_driver_url="$env_driver_url"
+        fi
     fi
 
     if [[ -z "$vgpu_driver_url" ]]; then
         print_info "Please provide the direct download URL OR a Google Drive sharing link for the vGPU driver."
         print_info "Example FTP link: ftp://192.168.1.31/shared/.../nvidia.deb"
-        read -p "Enter the download URL: " vgpu_driver_url
+        read -p "Enter the driver download URL: " vgpu_driver_url
     fi
 
     if [[ -z "$vgpu_driver_url" ]]; then
@@ -476,6 +487,86 @@ install_vgpu_driver_from_link() {
         POST_INSTALL_ACTIONS+=("reboot")
     else
         echo "❌ Downloaded file not found at ${downloaded_file_path}."
+    fi
+
+    # --- Handle vGPU Token Installation ---
+    if [[ -n "$env_token_url" ]]; then
+        read -p "Found default token URL in .env.secrets. Use this? [Y/n]: " use_default_token
+        if [[ "$use_default_token" != "n" && "$use_default_token" != "N" ]]; then
+            vgpu_token_url="$env_token_url"
+        fi
+    fi
+
+    if [[ -z "$vgpu_token_url" ]]; then
+        print_info "Please provide the download URL for the vGPU license token file (leave blank to skip)."
+        read -p "Enter the token download URL: " vgpu_token_url
+    fi
+
+    if [[ -n "$vgpu_token_url" ]]; then
+        local token_file_path="${tmp_dir}/client_configuration_token.tok"
+        print_info "Downloading vGPU token..."
+        
+        if [[ "$vgpu_token_url" =~ drive\.google\.com/file/d/([a-zA-Z0-9_-]+) ]]; then
+            local file_id="${BASH_REMATCH[1]}"
+            local confirm_token
+            confirm_token=$(curl -sc "${tmp_dir}/cookies.txt" "https://drive.google.com/uc?export=download&id=${file_id}" | grep -o 'confirm=[^&"'\'' ]*' | sed 's/confirm=//' | head -n 1)
+            
+            if [[ -n "$confirm_token" ]]; then
+                curl -L -# -b "${tmp_dir}/cookies.txt" -o "$token_file_path" "https://drive.google.com/uc?export=download&id=${file_id}&confirm=${confirm_token}"
+            else
+                curl -L -# -b "${tmp_dir}/cookies.txt" -o "$token_file_path" "https://drive.google.com/uc?export=download&id=${file_id}"
+            fi
+        else
+            local curl_cmd=(curl -L -# -o "$token_file_path")
+            if [[ -n "$ftp_auth" ]]; then
+                curl_cmd+=("-u" "$ftp_auth")
+            fi
+            curl_cmd+=("$vgpu_token_url")
+
+            if ! "${curl_cmd[@]}"; then
+                echo "❌ Failed to download the token file."
+            fi
+        fi
+
+        if [[ -f "$token_file_path" ]]; then
+            if file -b --mime-type "$token_file_path" | grep -q "text/html"; then
+                echo "❌ Downloaded token file is an HTML page. Ensure it's a direct download link."
+            else
+                print_info "Installing vGPU token..."
+                sudo mkdir -p /etc/nvidia/ClientConfigToken
+                sudo chmod 755 /etc/nvidia/ClientConfigToken
+                sudo cp "$token_file_path" /etc/nvidia/ClientConfigToken/client_configuration_token.tok
+                sudo chmod 644 /etc/nvidia/ClientConfigToken/client_configuration_token.tok
+                
+                print_info "Verifying token installation:"
+                sudo ls -l /etc/nvidia/ClientConfigToken/*.tok
+
+                print_info "Configuring /etc/nvidia/gridd.conf for FeatureType=1..."
+                if sudo test -f /etc/nvidia/gridd.conf.template && ! sudo test -f /etc/nvidia/gridd.conf; then
+                    sudo cp /etc/nvidia/gridd.conf.template /etc/nvidia/gridd.conf
+                elif ! sudo test -f /etc/nvidia/gridd.conf; then
+                    sudo touch /etc/nvidia/gridd.conf
+                fi
+                
+                if sudo grep -q "^FeatureType=" /etc/nvidia/gridd.conf; then
+                    sudo sed -i 's/^FeatureType=.*/FeatureType=1/' /etc/nvidia/gridd.conf
+                else
+                    echo "FeatureType=1" | sudo tee -a /etc/nvidia/gridd.conf >/dev/null
+                fi
+
+                print_info "Restarting nvidia-gridd service..."
+                sudo systemctl restart nvidia-gridd || echo "⚠️ Failed to restart nvidia-gridd. You may need to reboot first."
+                
+                print_success "vGPU token installed successfully."
+                
+                print_info "Checking vGPU License Status (waiting 3 seconds for service to start)..."
+                sleep 3
+                nvidia-smi -q | grep -i "License Status" || true
+                nvidia-smi -q | grep -i "Feature" || true
+            fi
+        else
+            echo "❌ Token download failed or file not found."
+        fi
     fi
 
     trap - EXIT
