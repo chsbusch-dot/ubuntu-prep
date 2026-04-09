@@ -12,6 +12,22 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+# Global error handler to clean up dangling temporary configurations if the script crashes
+cleanup_on_error() {
+    local exit_code=$?
+    local line_no=$1
+    echo -e "\n\e[1;31m❌ ERROR: Script failed unexpectedly at line $line_no (Exit code: $exit_code)\e[0m"
+    echo -e "\e[1;33mPerforming emergency cleanup...\e[0m"
+    
+    if [[ -n "$TARGET_USER" && -f "/etc/sudoers.d/99-temp-$TARGET_USER" ]]; then
+        sudo rm -f "/etc/sudoers.d/99-temp-$TARGET_USER"
+        echo "Revoked temporary sudo privileges for $TARGET_USER."
+    fi
+    
+    echo -e "Please check the error message above to troubleshoot."
+}
+trap 'cleanup_on_error ${LINENO}' ERR
+
 # Global array to track post-installation actions
 POST_INSTALL_ACTIONS=()
 
@@ -24,9 +40,9 @@ GPU_STATUS=""
 LLM_BACKEND_CHOICE=""
 INSTALL_OPENWEBUI="n"
 EXPOSE_LLM_ENGINE="n"
+EXPOSE_LLAMA_SERVER="n"
 LOAD_DEFAULT_MODEL="n"
 LLM_DEFAULT_MODEL_CHOICE=""
-INSTALL_GCC="n"
 
 # --- Helper Functions ---
 
@@ -185,7 +201,7 @@ setup_env_secrets() {
 # export TAVILI_API_KEY=""
 # export NVIDIA_VGPU_DRIVER_URL="ftp://192.168.1.31/shared/.../nvidia.deb"
 # export NVIDIA_VGPU_TOKEN_URL="ftp://192.168.1.31/shared/.../token.tok"
-# export NVIDIA_VGPU_FTP_AUTH="admin:password" # Works for FTP, HTTP Basic Auth, and SMB
+# export NVIDIA_VGPU_DOWNLOAD_AUTH="admin:password" # Works for FTP, HTTP Basic Auth, and SMB
 EOF
         sudo chmod 600 "$TARGET_USER_HOME/.env.secrets"
     fi
@@ -207,7 +223,7 @@ EOF
                     keys_to_prompt=(
                         "GITHUB_TOKEN" "AWS_SECRET_ACCESS_KEY" "OPENAI_API_KEY"
                         "GOOGLE_API_KEY" "CLAUDE_API_KEY" "NVIDIA_API_KEY"
-                        "NVIDIA_VGPU_DRIVER_URL" "NVIDIA_VGPU_FTP_AUTH"
+                        "NVIDIA_VGPU_DRIVER_URL" "NVIDIA_VGPU_DOWNLOAD_AUTH"
                     )
                     for key_name in "${keys_to_prompt[@]}"; do
                         read -p "Enter value for ${key_name}: " key_value
@@ -403,13 +419,23 @@ EOF
 }
 
 # 6. Install Google Gemini CLI
-install_gemini_cli_only() {
+install_gemini_cli() {
     print_header "Installing Google Gemini CLI"
     local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
     
     print_info "Installing Gemini CLI via NPM..."
-    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; npm install -g @google/generative-ai-cli"
-    print_success "Google Gemini CLI installed."
+    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; npm install -g @google/gemini-cli"
+    
+    print_info "Making Gemini CLI globally available to all users..."
+    sudo bash -c "cat <<EOF > /usr/local/bin/gemini
+#!/bin/bash
+export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"
+[ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"
+exec gemini \"\$@\"
+EOF"
+    sudo chmod +x /usr/local/bin/gemini
+
+    print_success "Google Gemini CLI installed globally."
 }
 
 # 7. Install NVIDIA vGPU Driver
@@ -423,7 +449,7 @@ install_vgpu_driver_from_link() {
 
     local vgpu_driver_url=""
     local vgpu_token_url=""
-    local ftp_auth=""
+    local download_auth=""
     local env_driver_url=""
     local env_token_url=""
 
@@ -431,7 +457,7 @@ install_vgpu_driver_from_link() {
     if sudo test -f "$TARGET_USER_HOME/.env.secrets"; then
         env_driver_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DRIVER_URL\"" | tr -d '\r')
         env_token_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_TOKEN_URL\"" | tr -d '\r')
-        ftp_auth=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_FTP_AUTH\"" | tr -d '\r')
+        download_auth=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DOWNLOAD_AUTH\"" | tr -d '\r')
     fi
 
     if [[ -n "$env_driver_url" ]]; then
@@ -477,8 +503,8 @@ install_vgpu_driver_from_link() {
     else
         # Use curl for regular direct URLs and FTP
         local curl_cmd=(curl -L -# -o "$downloaded_file_path")
-        if [[ -n "$ftp_auth" ]]; then
-            curl_cmd+=("-u" "$ftp_auth")
+        if [[ -n "$download_auth" ]]; then
+            curl_cmd+=("-u" "$download_auth")
         fi
         curl_cmd+=("$vgpu_driver_url")
 
@@ -497,12 +523,26 @@ install_vgpu_driver_from_link() {
     print_success "Download complete and verified."
 
     if [[ -f "$downloaded_file_path" ]]; then
-        print_info "Installing driver from ${downloaded_file_path}..."
+        print_info "Installing driver from ${downloaded_file_path}... (DKMS compilation may take 5-10 minutes)"
         # Pre-install dkms to prevent scary dpkg dependency errors during unpacking
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y dkms
-        # Use `dpkg -i` which runs as root and avoids the `_apt` user permission
-        # issues that `apt install` can have with local files.
+        
+        # Start a background timer so the user knows it hasn't crashed
+        (
+            local elapsed=0
+            while true; do
+                sleep 15
+                elapsed=$((elapsed + 15))
+                echo -e "\e[1;36mℹ️ Still working on driver installation... ($elapsed seconds elapsed)\e[0m"
+            done
+        ) &
+        local spinner_pid=$!
+
         sudo dpkg -i "$downloaded_file_path" || sudo apt-get -f install -y
+        
+        kill "$spinner_pid" 2>/dev/null || true
+        wait "$spinner_pid" 2>/dev/null || true
+        
         print_success "vGPU driver installed successfully."
         POST_INSTALL_ACTIONS+=("reboot")
     else
@@ -538,8 +578,8 @@ install_vgpu_driver_from_link() {
             fi
         else
             local curl_cmd=(curl -L -# -o "$token_file_path")
-            if [[ -n "$ftp_auth" ]]; then
-                curl_cmd+=("-u" "$ftp_auth")
+            if [[ -n "$download_auth" ]]; then
+                curl_cmd+=("-u" "$download_auth")
             fi
             curl_cmd+=("$vgpu_token_url")
 
@@ -610,11 +650,6 @@ install_nvtop() {
 # 10. Install CUDA
 install_cuda_toolkit() {
     print_info "Installing CUDA..."
-    if [[ "$INSTALL_GCC" == "y" ]]; then
-        print_info "Installing gcc..."
-        sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc
-    fi
     # Make CUDA repo installation dynamic based on Ubuntu version
     UBUNTU_VERSION=$(lsb_release -sr | tr -d '.')
     wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
@@ -650,7 +685,15 @@ EOF
     POST_INSTALL_ACTIONS+=("nvm") # Re-use 'nvm' flag to trigger the "new terminal" message
 }
 
-# 11. Install NVIDIA Container Toolkit
+# 11. Install gcc compiler
+install_gcc() {
+    print_info "Installing gcc compiler..."
+    sudo apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc
+    print_success "gcc compiler installed."
+}
+
+# 12. Install NVIDIA Container Toolkit
 install_container_toolkit() {
     print_info "Installing NVIDIA Container Toolkit..."
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
@@ -673,7 +716,7 @@ install_container_toolkit() {
     fi
 }
 
-# 12. Install cuDNN
+# 13. Install cuDNN
 install_cudnn() {
     print_info "Installing cuDNN..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y zlib1g
@@ -682,7 +725,7 @@ install_cudnn() {
     POST_INSTALL_ACTIONS+=("reboot")
 }
 
-# 13. Install Local LLM Support (Ollama, llama.cpp, Open-WebUI)
+# 14. Install Local LLM Support (Ollama, llama.cpp, Open-WebUI)
 install_local_llm() {
     print_header "Installing Local LLM Stack"
     
@@ -734,28 +777,24 @@ install_local_llm() {
         print_success "llama.cpp installed globally to /usr/local/bin."
 
         echo ""
-        if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
-            print_info "Downloading and running selected default model..."
-            local cmd_prefix="export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
-            if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "1" ]]; then
-                sudo -u "$TARGET_USER" bash -c "$cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -ngl 99 -p \"Once upon a time,\" -n 128"
-            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then
-                sudo -u "$TARGET_USER" bash -c "$cmd_prefix --hf-repo QuantFactory/Meta-Llama-3-8B-Instruct-GGUF --hf-file Meta-Llama-3-8B-Instruct.Q6_K.gguf -ngl 99 -c 8192 --temp 0.1 -p \"Explain the relationship between entropy and personal agency in closed systems.\""
-            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then
-                sudo -u "$TARGET_USER" bash -c "$cmd_prefix --hf-repo bartowski/gemma-2-27b-it-GGUF --hf-file gemma-2-27b-it-Q4_K_M.gguf -ngl 99 -fa -c 16384 -np 1 --ctk q8_0 --ctv q8_0 -ub 512 -p \"<start_of_turn>user\\nDo not think. Explain why personal agency is a prerequisite for intelligence.<end_of_turn>\\n<start_of_turn>model\\n\""
-            fi
-       fi
-
- echo ""
         local hf_args="--model /srv/models/llama.gguf"
         if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "1" ]]; then hf_args="--hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf"; fi
-        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then hf_args="-m $TARGET_USER_HOME/Meta-Llama-3-8B-Instruct-Q6_K.gguf"; fi
-        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then hf_args="-m $TARGET_USER_HOME/gemma-4-31b-it-Q4_K_M.gguf"; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then hf_args="--hf-repo QuantFactory/Meta-Llama-3-8B-Instruct-GGUF --hf-file Meta-Llama-3-8B-Instruct.Q6_K.gguf"; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then hf_args="--hf-repo bartowski/gemma-2-27b-it-GGUF --hf-file gemma-2-27b-it-Q4_K_M.gguf"; fi
         if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" && -n "$LLAMACPP_MODEL_REPO" ]]; then hf_args="-hr \"$LLAMACPP_MODEL_REPO\""; fi
 
+        if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
+            print_info "Pulling selected model..."
+            local cmd_prefix="export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
+            sudo -u "$TARGET_USER" bash -c "$cmd_prefix $hf_args -ngl 0 -n 1 -p \"Ready.\"" >/dev/null 2>&1 || true
+        fi
+
         local llama_host_args="--port 8081"
-        if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
-            llama_host_args="--host 0.0.0.0 --port 8081"
+        if [[ "$install_llamacpp_cuda" == "y" ]]; then
+            llama_host_args+=" -ngl 99"
+        fi
+        if [[ "$EXPOSE_LLM_ENGINE" == "y" || "$EXPOSE_LLAMA_SERVER" == "y" ]]; then
+            llama_host_args+=" --host 0.0.0.0"
         fi
 
         if [[ "$INSTALL_LLAMA_SERVICE" == "y" ]]; then
@@ -763,7 +802,7 @@ install_local_llm() {
                 
                 local env_cuda=""
                 if [[ "$install_llamacpp_cuda" == "y" ]]; then
-                    env_cuda="Environment=\"CUDA_VISIBLE_DEVICES=-0\"\nEnvironment=\"LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64\""
+                    env_cuda="Environment=\"LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64\""
                 fi
 
                 sudo bash -c "cat <<EOF > /etc/systemd/system/llama-server.service
@@ -773,6 +812,7 @@ After=network.target
 
 [Service]
 User=$TARGET_USER
+Environment=\"HOME=$TARGET_USER_HOME\"
 $env_cuda
 ExecStart=/usr/local/bin/llama-server $hf_args $llama_host_args
 Restart=always
@@ -784,14 +824,6 @@ EOF"
                 sudo systemctl daemon-reload
                 sudo systemctl enable --now llama-server
                 print_success "llama.cpp service installed and started on port 8081."
-        fi
-
-        if [[ "$install_llamacpp_cuda" == "y" ]]; then
-            print_info "To run the server manually, use a command like this (hiding the first compute device if needed):"
-            echo "CUDA_VISIBLE_DEVICES=\"-0\" llama-server $hf_args $llama_host_args"
-        else
-            print_info "To run the server manually, use a command like this:"
-            echo "llama-server $hf_args $llama_host_args"
         fi
     fi
 
@@ -809,11 +841,6 @@ EOF"
             POST_INSTALL_ACTIONS+=("ufw")
             print_success "Ollama configured for external access."
         fi
-
-        print_info "Verifying Ollama service listening ports..."
-        ss -antp | grep :11434 || true
-        print_info "Testing Ollama local API..."
-        curl http://localhost:11434 -v || true
 
         print_info "Locally installed Ollama models:"
         ollama list || echo "No models installed yet."
@@ -864,11 +891,59 @@ EOF"
             
             "${docker_cmd[@]}"
             print_success "Open-WebUI installed and running on network host."
+            print_info "NOTE: When you first open Open-WebUI, it will say 'Model not selected'."
+            print_info "You must click the dropdown at the top of the screen to select your loaded model."
+        fi
+    fi
+
+    if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
+        echo ""
+        print_info "Running llama.cpp performance test... (This may take a minute to download the test model)"
+        local test_cmd_prefix="export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
+        local tmp_out
+        tmp_out=$(mktemp)
+        
+        (
+            local elapsed=0
+            while true; do
+                sleep 10
+                elapsed=$((elapsed + 10))
+                echo -e "\e[1;36mℹ️ Still running inference test... ($elapsed seconds elapsed)\e[0m"
+            done
+        ) &
+        local spinner_pid=$!
+
+        sudo -u "$TARGET_USER" bash -c "$test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 -ngl 99" > "$tmp_out" 2>&1 || true
+
+        kill "$spinner_pid" 2>/dev/null || true
+        wait "$spinner_pid" 2>/dev/null || true
+
+        local prompt_speed=$(grep -i 'prompt eval time' "$tmp_out" | grep -Eo '[0-9.]+ tokens per second' | awk '{print $1}' | head -n 1)
+        local gen_speed=$(grep -i 'eval time' "$tmp_out" | grep -iv 'prompt' | grep -Eo '[0-9.]+ tokens per second' | awk '{print $1}' | head -n 1)
+
+        if [[ -n "$prompt_speed" && -n "$gen_speed" ]]; then
+            print_success "llama.cpp test complete: [ Prompt: ${prompt_speed} t/s | Generation: ${gen_speed} t/s ]"
+        else
+            print_success "llama.cpp test complete."
+        fi
+        rm -f "$tmp_out"
+
+        echo ""
+        if [[ "$install_llamacpp_cuda" == "y" ]]; then
+            print_info "To run the server manually, use a command like this:"
+            echo "llama-server $hf_args $llama_host_args"
+            print_info "To chat interactively in the CLI, use:"
+            echo "llama-cli $hf_args -ngl 99 -cnv"
+        else
+            print_info "To run the server manually, use a command like this:"
+            echo "llama-server $hf_args $llama_host_args"
+            print_info "To chat interactively in the CLI, use:"
+            echo "llama-cli $hf_args -cnv"
         fi
     fi
 }
 
-# 14. Install OpenClaw
+# 15. Install OpenClaw
 install_openclaw() {
     print_header "Installing OpenClaw"
 
@@ -1022,8 +1097,8 @@ check_installations() {
     fi
 
     # 6. Gemini CLI (index 6)
-    if sudo find "$TARGET_USER_HOME/.nvm" -name "gemini" 2>/dev/null | grep -q .; then
-        print_info "Found existing Gemini CLI installation."
+    if command -v gemini &> /dev/null; then
+        print_info "Found existing Google Gemini CLI installation."
         MASTER_INSTALLED_STATE[6]=1
     fi
 
@@ -1051,32 +1126,133 @@ check_installations() {
         MASTER_INSTALLED_STATE[10]=1
     fi
 
-    # 11. NVIDIA Container Toolkit (index 11)
-    if dpkg -l | grep -q 'nvidia-container-toolkit'; then
-        print_info "Found existing NVIDIA Container Toolkit."
+    # 11. gcc compiler (index 11)
+    if command -v gcc &> /dev/null; then
+        print_info "Found existing gcc compiler."
         MASTER_INSTALLED_STATE[11]=1
     fi
 
-    # 12. cuDNN (index 12)
-    if dpkg -l | grep -q 'cudnn9-cuda-13'; then
-        print_info "Found existing cuDNN installation."
+    # 12. NVIDIA Container Toolkit (index 12)
+    if dpkg -l | grep -q 'nvidia-container-toolkit'; then
+        print_info "Found existing NVIDIA Container Toolkit."
         MASTER_INSTALLED_STATE[12]=1
     fi
 
-    # 13. Local LLM Stack (index 13)
+    # 13. cuDNN (index 13)
+    if dpkg -l | grep -q 'cudnn9-cuda-13'; then
+        print_info "Found existing cuDNN installation."
+        MASTER_INSTALLED_STATE[13]=1
+    fi
+
+    # 14. Local LLM Stack (index 14)
     local llm_installed=1
     if ! command -v llama-server &> /dev/null; then llm_installed=0; fi
     if ! command -v ollama &> /dev/null; then llm_installed=0; fi
     if ! sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then llm_installed=0; fi
     if [[ $llm_installed -eq 1 ]]; then
         print_info "Found existing Local LLM Stack (Ollama, llama.cpp, Open-WebUI)."
-        MASTER_INSTALLED_STATE[13]=1
+        MASTER_INSTALLED_STATE[14]=1
     fi
 
-    # 14. OpenClaw (index 14)
+    # 15. OpenClaw (index 15)
     if [ -f "$TARGET_USER_HOME/.local/bin/openclaw" ]; then
         print_info "Found existing OpenClaw installation."
-        MASTER_INSTALLED_STATE[14]=1
+        MASTER_INSTALLED_STATE[15]=1
+    fi
+}
+
+# --- Verification ---
+verify_installations() {
+    print_header "Verifying Live Services & APIs"
+    local services_checked=0
+
+    # Verify llama-server
+    if systemctl is-active --quiet llama-server 2>/dev/null; then
+        services_checked=1
+        print_info "Waiting for llama.cpp server to initialize and load the model (timeout 60s)..."
+        local api_up=0
+        for i in {1..30}; do
+            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/health)" == "200" ]]; then
+                api_up=1
+                break
+            fi
+            sleep 2
+        done
+
+        if [[ $api_up -eq 1 ]]; then
+            print_success "llama.cpp server API is reachable and ready."
+            
+            print_info "Testing llama.cpp /v1/chat/completions endpoint..."
+            local response
+            response=$(curl -s -X POST http://127.0.0.1:8081/v1/chat/completions \
+                -H "Content-Type: application/json" \
+                -d '{
+                    "messages": [{"role": "user", "content": "Hello! Say hi."}],
+                    "max_tokens": 15
+                }')
+            if echo "$response" | grep -q '"content"'; then
+                print_success "llama.cpp completion test passed."
+            else
+                echo "⚠️ llama.cpp completion test failed or returned an unexpected response."
+            fi
+        else
+            echo "⚠️ llama.cpp server API did not return HTTP 200 in time. It might still be loading the model."
+        fi
+    fi
+
+    # Verify Ollama
+    if systemctl is-active --quiet ollama 2>/dev/null; then
+        services_checked=1
+        print_info "Testing Ollama API..."
+        if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:11434/api/tags | grep -q "200"; then
+            print_success "Ollama API is reachable and ready."
+        else
+            echo "⚠️ Ollama API is not responding correctly."
+        fi
+    fi
+
+    # Verify Open-WebUI
+    if command -v docker &> /dev/null && sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then
+        services_checked=1
+        print_info "Waiting for Open-WebUI to initialize (timeout 60s)..."
+        local webui_up=0
+        for i in {1..30}; do
+            # Check both the /health API endpoint and the root frontend route
+            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/health)" == "200" ]] || [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/)" == "200" ]]; then
+                webui_up=1
+                break
+            fi
+            sleep 2
+        done
+        if [[ $webui_up -eq 1 ]]; then
+            print_success "Open-WebUI frontend is reachable and ready on port 8080."
+        else
+            echo "⚠️ Open-WebUI did not return HTTP 200 in time. It might still be starting."
+        fi
+    fi
+
+    # Verify OpenClaw
+    if [ -f "$TARGET_USER_HOME/.local/bin/openclaw" ]; then
+        services_checked=1
+        print_info "Waiting for OpenClaw Gateway to initialize (timeout 60s)..."
+        local oc_up=0
+        for i in {1..30}; do
+            # A response other than 000 means the server is bound and successfully accepting HTTP requests
+            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18789/)" != "000" ]]; then
+                oc_up=1
+                break
+            fi
+            sleep 2
+        done
+        if [[ $oc_up -eq 1 ]]; then
+            print_success "OpenClaw Gateway is reachable and ready on port 18789."
+        else
+            echo "⚠️ OpenClaw Gateway is not responding on port 18789. It might still be starting."
+        fi
+    fi
+
+    if [[ $services_checked -eq 0 ]]; then
+        print_info "No live background LLM services detected for API verification."
     fi
 }
 
@@ -1134,9 +1310,9 @@ print_final_summary() {
         echo ""
     fi
 
-    if sudo -u "$TARGET_USER" bash -c "$nvm_cmd; command -v gemini" &> /dev/null; then
+    if command -v gemini &> /dev/null; then
         print_info "Google Gemini CLI:"
-        sudo -u "$TARGET_USER" bash -c "$nvm_cmd; gemini --version 2>/dev/null || echo 'Installed'"
+        gemini --version | head -n 1 || echo "Installed"
         echo ""
     fi
 
@@ -1156,6 +1332,12 @@ print_final_summary() {
     if command -v nvtop &> /dev/null; then
         print_info "nvtop (GPU Monitor):"
         nvtop --version
+        echo ""
+    fi
+
+    if command -v gcc &> /dev/null; then
+        print_info "gcc Compiler:"
+        gcc --version | head -n 1
         echo ""
     fi
 
@@ -1202,6 +1384,17 @@ print_final_summary() {
         sudo -u "$TARGET_USER" bash -c "export PATH=\"$TARGET_USER_HOME/.local/bin:\$PATH\"; openclaw --version 2>/dev/null || echo 'Installed'"
         echo ""
     fi
+
+    print_info "System Hostname Resolution:"
+    local current_hostname
+    current_hostname=$(hostname)
+    if hostname -i &> /dev/null; then
+        print_success "Hostname '$current_hostname' resolves correctly ($(hostname -i | awk '{print $1}' | head -n 1))."
+    else
+        echo -e "\e[1;31m⚠️  WARNING: Hostname '$current_hostname' does not resolve.\e[0m"
+        echo "   Please add '127.0.1.1 $current_hostname' to your /etc/hosts file to prevent network and sudo delays."
+    fi
+    echo ""
 
     if [[ -z "$unique_actions" ]]; then
         return
@@ -1259,15 +1452,15 @@ show_menu() {
     local menu_body=""
 
     for master_index in "${ACTIVE_INDICES[@]}"; do
-        # Hide NVIDIA options (indices 7, 9 to 12) if no GPU is detected
-        if [[ "$HAS_NVIDIA_GPU" == false ]] && [[ $master_index -eq 7 || ($master_index -ge 9 && $master_index -le 12) ]]; then
+        # Hide NVIDIA options (indices 7, 9 to 13) if no GPU is detected
+        if [[ "$HAS_NVIDIA_GPU" == false ]] && [[ $master_index -eq 7 || ($master_index -ge 9 && $master_index -le 13) ]]; then
             continue
         fi
 
         # Visual grouping
         if [[ $master_index -eq 7 && "$HAS_NVIDIA_GPU" == true ]]; then menu_body+="\n"; fi
         if [[ $master_index -eq 8 && "$HAS_NVIDIA_GPU" == false ]]; then menu_body+="\n"; fi
-        if [[ $master_index -eq 13 || $master_index -eq 14 ]]; then menu_body+="\n"; fi
+        if [[ $master_index -eq 14 || $master_index -eq 15 ]]; then menu_body+="\n"; fi
 
         local line=""
         if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 1 ]]; then
@@ -1313,6 +1506,7 @@ main() {
         "Install btop (System Monitor)"
         "Install nvtop (GPU Monitor)"
         "Install CUDA"
+        "Install gcc compiler"
         "Install NVIDIA Container Toolkit"
         "Install cuDNN"
         "Install Local LLM Support (Ollama, llama.cpp, Open-WebUI)"
@@ -1326,19 +1520,20 @@ main() {
         install_docker
         install_nvm_node
         install_homebrew
-        install_gemini_cli_only
+        install_gemini_cli
         install_vgpu_driver_from_link
         install_btop
         install_nvtop
         install_cuda_toolkit
+        install_gcc
         install_container_toolkit
         install_cudnn
         install_local_llm
         install_openclaw
     )
 
-    local MASTER_SELECTIONS=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
-    local MASTER_INSTALLED_STATE=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+    local MASTER_SELECTIONS=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+    local MASTER_INSTALLED_STATE=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
     local ACTIVE_INDICES=()
     local UI_TO_MASTER=()
 
@@ -1391,9 +1586,9 @@ main() {
         fi
     done
 
-    if [[ ${GOAL_SELECTIONS[0]} -eq 1 ]]; then ACTIVE_INDICES+=(0 1 2 3 4 5 6 14); fi
-    if [[ ${GOAL_SELECTIONS[1]} -eq 1 ]]; then ACTIVE_INDICES+=(7 8 9 10 11 12); fi
-    if [[ ${GOAL_SELECTIONS[2]} -eq 1 ]]; then ACTIVE_INDICES+=(13); fi
+    if [[ ${GOAL_SELECTIONS[0]} -eq 1 ]]; then ACTIVE_INDICES+=(0 1 2 3 4 5 6 15); fi
+    if [[ ${GOAL_SELECTIONS[1]} -eq 1 ]]; then ACTIVE_INDICES+=(7 8 9 10 11 12 13); fi
+    if [[ ${GOAL_SELECTIONS[2]} -eq 1 ]]; then ACTIVE_INDICES+=(14); fi
 
     IFS=$'\n' ACTIVE_INDICES=($(sort -n <<<"${ACTIVE_INDICES[*]}"))
     unset IFS
@@ -1410,34 +1605,8 @@ main() {
             if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 1 ]]; then
                 echo -e "\nOption $((choice)) is already installed." && sleep 1
             else
-                # Sub-menu for CUDA (index 10)
-                if [[ $master_index -eq 10 && ${MASTER_SELECTIONS[10]} -eq 0 ]]; then
-                    INSTALL_GCC="n"
-                    local opt_selections=(0)
-                    while true; do
-                        clear
-                        echo -e "\n\e[1;36mConfigure Additional Options:\e[0m"
-                        if [[ ${opt_selections[0]} -eq 1 ]]; then
-                            echo -e " \e[1;32m[x]\e[0m 1. Install gcc compiler?"
-                        else
-                            echo -e " [ ] 1. Install gcc compiler?"
-                        fi
-                        echo "---------------------------------"
-                        echo "Use numbers [1] to toggle. Press 'c' to confirm."
-                        read -p "Your choice: " opt_choice
-                        if [[ "$opt_choice" == "1" ]]; then
-                            opt_selections[0]=$((1 - opt_selections[0]))
-                        elif [[ "$opt_choice" == "c" || "$opt_choice" == "C" ]]; then
-                            break
-                        else
-                            echo -e "\nInvalid option." && sleep 1
-                        fi
-                    done
-                    [[ ${opt_selections[0]} -eq 1 ]] && INSTALL_GCC="y"
-                fi
-
-                # Sub-menu for Local LLM Stack (index 13)
-                if [[ $master_index -eq 13 && ${MASTER_SELECTIONS[13]} -eq 0 ]]; then
+                # Sub-menu for Local LLM Stack (index 14)
+                if [[ $master_index -eq 14 && ${MASTER_SELECTIONS[14]} -eq 0 ]]; then
                     LLM_BACKEND_CHOICE=""
                     local cancel_llm=false
                     while true; do
@@ -1477,6 +1646,7 @@ main() {
 
                 if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
                     opt_options+=("Install llama.cpp model as system service?")
+                        opt_options+=("Open llama server to network?")
                 fi
 
                 local opt_selections=()
@@ -1508,7 +1678,10 @@ main() {
                 [[ ${opt_selections[0]} -eq 1 ]] && INSTALL_OPENWEBUI="y"
                 [[ ${opt_selections[1]} -eq 1 ]] && EXPOSE_LLM_ENGINE="y"
                 [[ ${opt_selections[2]} -eq 1 ]] && LOAD_DEFAULT_MODEL="y"
-                if [[ ${#opt_options[@]} -eq 4 && ${opt_selections[3]} -eq 1 ]]; then INSTALL_LLAMA_SERVICE="y"; fi
+                    if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
+                        [[ ${opt_selections[3]} -eq 1 ]] && INSTALL_LLAMA_SERVICE="y"
+                        [[ ${opt_selections[4]} -eq 1 ]] && EXPOSE_LLAMA_SERVER="y"
+                    fi
 
                 if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
                     echo -e "\n\e[1;36mSelect a default model to load:\e[0m"
@@ -1532,18 +1705,16 @@ main() {
 
                 MASTER_SELECTIONS[$master_index]=$((1 - MASTER_SELECTIONS[$master_index]))
 
-                if [[ $master_index -eq 13 && ${MASTER_SELECTIONS[13]} -eq 0 ]]; then
+                if [[ $master_index -eq 14 && ${MASTER_SELECTIONS[14]} -eq 0 ]]; then
                     LLM_BACKEND_CHOICE=""
                     INSTALL_OPENWEBUI="n"
+                    EXPOSE_LLAMA_SERVER="n"
                     TEST_LLAMACPP="n"
                     OLLAMA_PULL_MODEL=""
                 fi
-                if [[ $master_index -eq 10 && ${MASTER_SELECTIONS[10]} -eq 0 ]]; then
-                    INSTALL_GCC="n"
-                fi
 
-                # Dependency logic: Gemini CLI (index 6) and OpenClaw (index 14) require NVM (index 4)
-                if [[ ($master_index -eq 6 || $master_index -eq 14) && ${MASTER_SELECTIONS[$master_index]} -eq 1 && ${MASTER_INSTALLED_STATE[4]} -eq 0 ]]; then
+                # Dependency logic: Gemini CLI (index 6) and OpenClaw (index 15) require NVM (index 4)
+                if [[ ($master_index -eq 6 || $master_index -eq 15) && ${MASTER_SELECTIONS[$master_index]} -eq 1 && ${MASTER_INSTALLED_STATE[4]} -eq 0 ]]; then
                     if [[ ${MASTER_SELECTIONS[4]} -eq 0 ]]; then
                         MASTER_SELECTIONS[4]=1
                         ensure_active_index 4
@@ -1552,32 +1723,32 @@ main() {
                 elif [[ $master_index -eq 4 && ${MASTER_SELECTIONS[4]} -eq 0 ]]; then
                     local unselected_deps=0
                     if [[ ${MASTER_SELECTIONS[6]} -eq 1 ]]; then MASTER_SELECTIONS[6]=0; unselected_deps=1; fi
-                    if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then MASTER_SELECTIONS[14]=0; unselected_deps=1; fi
+                    if [[ ${MASTER_SELECTIONS[15]} -eq 1 ]]; then MASTER_SELECTIONS[15]=0; unselected_deps=1; fi
                     if [[ $unselected_deps -eq 1 ]]; then
                         echo -e "\n[Auto-unselected] Gemini and/or OpenClaw were unselected because they require NVM." && sleep 2
                     fi
                 fi
 
-                # Dependency logic for NVIDIA Container Toolkit (index 11) requiring Docker (index 3)
-                if [[ $master_index -eq 11 && ${MASTER_SELECTIONS[11]} -eq 1 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then
+                # Dependency logic for NVIDIA Container Toolkit (index 12) requiring Docker (index 3)
+                if [[ $master_index -eq 12 && ${MASTER_SELECTIONS[12]} -eq 1 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then
                     if [[ ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
                         MASTER_SELECTIONS[3]=1
                         ensure_active_index 3
                         echo -e "\n[Auto-selected] Docker is required for NVIDIA Container Toolkit installation." && sleep 1.5
                     fi
                 elif [[ $master_index -eq 3 && ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
-                    if [[ ${MASTER_SELECTIONS[11]} -eq 1 ]]; then
-                        MASTER_SELECTIONS[11]=0
+                    if [[ ${MASTER_SELECTIONS[12]} -eq 1 ]]; then
+                        MASTER_SELECTIONS[12]=0
                         echo -e "\n[Auto-unselected] NVIDIA Container Toolkit was unselected because it requires Docker." && sleep 2
                     fi
                 fi
 
-                # Dependency logic for Local LLM Stack (index 13)
-                if [[ $master_index -eq 13 && ${MASTER_SELECTIONS[13]} -eq 1 ]]; then
+                # Dependency logic for Local LLM Stack (index 14)
+                if [[ $master_index -eq 14 && ${MASTER_SELECTIONS[14]} -eq 1 ]]; then
                     local auto_selected=""
                     if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y") && ${MASTER_SELECTIONS[3]} -eq 0 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then MASTER_SELECTIONS[3]=1; ensure_active_index 3; auto_selected+="Docker, "; fi
                     if [[ "$LLM_BACKEND_CHOICE" == "llama_cuda" && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[10]} -eq 0 && ${MASTER_INSTALLED_STATE[10]} -eq 0 ]]; then MASTER_SELECTIONS[10]=1; ensure_active_index 10; auto_selected+="CUDA, "; fi
-                    if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y" || "$LLM_BACKEND_CHOICE" == "llama_cuda") && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[11]} -eq 0 && ${MASTER_INSTALLED_STATE[11]} -eq 0 ]]; then MASTER_SELECTIONS[11]=1; ensure_active_index 11; auto_selected+="NVIDIA CTK, "; fi
+                    if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y" || "$LLM_BACKEND_CHOICE" == "llama_cuda") && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[12]} -eq 0 && ${MASTER_INSTALLED_STATE[12]} -eq 0 ]]; then MASTER_SELECTIONS[12]=1; ensure_active_index 12; auto_selected+="NVIDIA CTK, "; fi
                     if [[ -n "$auto_selected" ]]; then
                         echo -e "\n[Auto-selected] ${auto_selected%, } required for Local LLM Stack components." && sleep 2
                     fi
@@ -1587,12 +1758,16 @@ main() {
             for master_index in "${ACTIVE_INDICES[@]}"; do 
                 if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 0 ]]; then 
                     MASTER_SELECTIONS[$master_index]=1
-                    if [[ $master_index -eq 11 && -z "$LLM_BACKEND_CHOICE" ]]; then LLM_BACKEND_CHOICE="ollama"; fi
+                    if [[ $master_index -eq 14 && -z "$LLM_BACKEND_CHOICE" ]]; then LLM_BACKEND_CHOICE="ollama"; fi
                 fi
             done
-            if [[ ${MASTER_SELECTIONS[11]} -eq 1 && ${MASTER_INSTALLED_STATE[3]} -eq 0 && ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
+            if [[ ${MASTER_SELECTIONS[12]} -eq 1 && ${MASTER_INSTALLED_STATE[3]} -eq 0 && ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
                 MASTER_SELECTIONS[3]=1
                 ensure_active_index 3
+            fi
+            if [[ (${MASTER_SELECTIONS[6]} -eq 1 || ${MASTER_SELECTIONS[15]} -eq 1) && ${MASTER_INSTALLED_STATE[4]} -eq 0 && ${MASTER_SELECTIONS[4]} -eq 0 ]]; then
+                MASTER_SELECTIONS[4]=1
+                ensure_active_index 4
             fi
         elif [[ "$choice" == "i" || "$choice" == "I" ]]; then
             break
@@ -1602,6 +1777,91 @@ main() {
             echo -e "\nInvalid option." && sleep 1
         fi
     done
+
+    # --- Final Pre-Installation Dependency Validation ---
+    local validation_warnings=0
+
+    # 1. Gemini (6) / OpenClaw (15) -> NVM (4)
+    if [[ (${MASTER_SELECTIONS[6]} -eq 1 || ${MASTER_SELECTIONS[15]} -eq 1) && ${MASTER_INSTALLED_STATE[4]} -eq 0 && ${MASTER_SELECTIONS[4]} -eq 0 ]]; then
+        MASTER_SELECTIONS[4]=1
+        validation_warnings=1
+        echo -e "\n\e[1;33m[Validation Fix]\e[0m NVM/Node.js auto-added as it is required by Gemini/OpenClaw."
+    fi
+
+    # 2. NVIDIA CTK (12) -> Docker (3)
+    if [[ ${MASTER_SELECTIONS[12]} -eq 1 && ${MASTER_INSTALLED_STATE[3]} -eq 0 && ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
+        MASTER_SELECTIONS[3]=1
+        validation_warnings=1
+        echo -e "\n\e[1;33m[Validation Fix]\e[0m Docker auto-added as it is required by NVIDIA Container Toolkit."
+    fi
+
+    # 3. Local LLM Stack (14) -> Various
+    if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then
+        if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y") && ${MASTER_SELECTIONS[3]} -eq 0 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then
+            MASTER_SELECTIONS[3]=1
+            validation_warnings=1
+            echo -e "\n\e[1;33m[Validation Fix]\e[0m Docker auto-added as it is required by Open-WebUI."
+        fi
+        if [[ "$LLM_BACKEND_CHOICE" == "llama_cuda" && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[10]} -eq 0 && ${MASTER_INSTALLED_STATE[10]} -eq 0 ]]; then
+            MASTER_SELECTIONS[10]=1
+            validation_warnings=1
+            echo -e "\n\e[1;33m[Validation Fix]\e[0m CUDA auto-added as it is required by llama.cpp (CUDA backend)."
+        fi
+        if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y" || "$LLM_BACKEND_CHOICE" == "llama_cuda") && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[12]} -eq 0 && ${MASTER_INSTALLED_STATE[12]} -eq 0 ]]; then
+            MASTER_SELECTIONS[12]=1
+            validation_warnings=1
+            echo -e "\n\e[1;33m[Validation Fix]\e[0m NVIDIA Container Toolkit auto-added as it is required by your LLM/GPU setup."
+        fi
+    fi
+
+    if [[ $validation_warnings -eq 1 ]]; then
+        echo -e "\e[1;36mDependencies resolved. Proceeding with installation...\e[0m"
+        sleep 3
+    fi
+
+    # --- Disk Space Check ---
+    print_info "Checking available disk space..."
+    local required_gb=5 # Base requirement for general system updates and basic tools
+    if [[ ${MASTER_SELECTIONS[10]} -eq 1 ]]; then required_gb=$((required_gb + 5)); fi # CUDA Toolkit
+    if [[ ${MASTER_SELECTIONS[12]} -eq 1 ]]; then required_gb=$((required_gb + 2)); fi # NVIDIA Container Toolkit & Docker usage
+    if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then required_gb=$((required_gb + 10)); fi # LLM Models and Open-WebUI image
+    
+    local free_space_mb
+    free_space_mb=$(df -m "$TARGET_USER_HOME" | awk 'NR==2 {print $4}')
+    local free_space_gb=$((free_space_mb / 1024))
+    
+    if [[ "$free_space_gb" -lt "$required_gb" ]]; then
+        echo -e "\n\e[1;31m⚠️  WARNING: Low Disk Space\e[0m"
+        echo -e "You have selected options that require approximately \e[1;33m${required_gb}GB\e[0m of free space."
+        echo -e "Your target partition ($TARGET_USER_HOME) only has \e[1;31m${free_space_gb}GB\e[0m available."
+        read -p "Do you want to proceed anyway? [y/N]: " proceed_space
+        if [[ "$proceed_space" != "y" && "$proceed_space" != "Y" ]]; then
+            echo -e "\n❌ Aborting installation to prevent disk exhaustion."
+            exit 1
+        fi
+    else
+        print_success "Disk space check passed (Required: ~${required_gb}GB, Available: ${free_space_gb}GB)."
+    fi
+
+    # --- RAM / Memory Check ---
+    if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then
+        print_info "Checking available system memory for LLM inference..."
+        local total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+        local total_ram_gb=$((total_ram_kb / 1024 / 1024))
+        
+        if [[ "$total_ram_gb" -lt 16 ]]; then
+            echo -e "\n\e[1;31m⚠️  WARNING: Low System Memory\e[0m"
+            echo -e "You selected the Local LLM Stack, which generally requires at least \e[1;33m16GB\e[0m of RAM."
+            echo -e "Your system only has \e[1;31m${total_ram_gb}GB\e[0m of total memory."
+            read -p "Do you want to proceed anyway? Performance may be degraded. [y/N]: " proceed_ram
+            if [[ "$proceed_ram" != "y" && "$proceed_ram" != "Y" ]]; then
+                echo -e "\n❌ Aborting installation to prevent system instability."
+                exit 1
+            fi
+        else
+            print_success "Memory check passed (${total_ram_gb}GB total RAM available)."
+        fi
+    fi
 
     # Configure API keys after menu selection, before installation tasks begin
     setup_env_secrets
@@ -1625,6 +1885,7 @@ main() {
         done
 
         print_success "Selected installations are complete."
+        verify_installations
         print_final_summary
 
         # --- Expose Services Menu ---
@@ -1694,6 +1955,8 @@ main() {
             else
                 exposed_msg+="  - llama.cpp is at IP:8081 (or 8080 depending on configuration)\n"
             fi
+        elif [[ "$EXPOSE_LLAMA_SERVER" == "y" ]]; then
+            exposed_msg+="  - llama.cpp is at IP:8081 (or 8080 depending on configuration)\n"
         fi
         if [[ "$INSTALL_OPENWEBUI" == "y" ]]; then
             exposed_msg+="  - Open-WebUI is at IP:8080\n"
@@ -1703,13 +1966,13 @@ main() {
             echo -e "\n\e[1;33mIMPORTANT: Firewall rules have been configured, but UFW is NOT enabled by default.\e[0m"
             echo -e "\e[1;36mThe following UFW rules have been prepared:\e[0m"
             echo "  - ALLOW 22/tcp (SSH)"
-            if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then echo "  - ALLOW 18789/tcp (OpenClaw Gateway)"; fi
-            if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
+            if [[ ${MASTER_SELECTIONS[15]} -eq 1 ]]; then echo "  - ALLOW 18789/tcp (OpenClaw Gateway)"; fi
+            if [[ "$EXPOSE_LLM_ENGINE" == "y" || "$EXPOSE_LLAMA_SERVER" == "y" ]]; then
                 if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then echo "  - ALLOW 11434/tcp (Ollama API)"; else echo "  - ALLOW 8081/tcp (llama.cpp Server)"; fi
             fi
             if [[ "$INSTALL_OPENWEBUI" == "y" ]]; then echo "  - ALLOW 8080/tcp (Open-WebUI)"; fi
             echo ""
-            read -p "Do you want to enable the UFW firewall now? (WARNING: Ensure SSH access is allowed if remote) [y/N]: " enable_ufw
+            read -p "Do you want to enable the UFW firewall now? (WARNING: Ensure SSH access is allowed if remote) [y/N]: " enable_ufw < /dev/tty
             if [[ "$enable_ufw" == "y" || "$enable_ufw" == "Y" ]]; then
                 sudo ufw default deny incoming &>/dev/null || true
                 sudo ufw allow 22/tcp &>/dev/null || true
