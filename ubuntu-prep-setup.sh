@@ -26,6 +26,7 @@ INSTALL_OPENWEBUI="n"
 EXPOSE_LLM_ENGINE="n"
 LOAD_DEFAULT_MODEL="n"
 LLM_DEFAULT_MODEL_CHOICE=""
+INSTALL_GCC="n"
 
 # --- Helper Functions ---
 
@@ -87,6 +88,20 @@ install_base_dependencies() {
     sudo apt-get update -qq
     # These are required by various installation functions
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y jq build-essential procps curl file git wget unzip lsb-release gnupg ca-certificates
+
+    print_info "Configuring Landscape sysinfo display..."
+    sudo mkdir -p /etc/landscape
+    if ! sudo grep -q "^\[sysinfo\]" /etc/landscape/client.conf 2>/dev/null; then
+        echo -e "\n[sysinfo]\nshow_memory = True\nshow_cpu_cores = True" | sudo tee -a /etc/landscape/client.conf > /dev/null
+    else
+        if ! sudo grep -q "^show_memory" /etc/landscape/client.conf 2>/dev/null; then
+            sudo sed -i '/^\[sysinfo\]/a show_memory = True' /etc/landscape/client.conf
+        fi
+        if ! sudo grep -q "^show_cpu_cores" /etc/landscape/client.conf 2>/dev/null; then
+            sudo sed -i '/^\[sysinfo\]/a show_cpu_cores = True' /etc/landscape/client.conf
+        fi
+    fi
+
     print_success "Base dependencies are present."
 }
 # --- Installation Functions ---
@@ -364,6 +379,11 @@ EOF
 # 5. Install Homebrew
 install_homebrew() {
     print_header "Installing Homebrew"
+    
+    print_info "Preparing Homebrew directory permissions for standard user..."
+    sudo mkdir -p /home/linuxbrew/.linuxbrew
+    sudo chown -R "$TARGET_USER":"$TARGET_USER" /home/linuxbrew
+
     print_info "Running Homebrew installation script..."
     sudo -u "$TARGET_USER" bash -c "NONINTERACTIVE=1 /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
     
@@ -590,8 +610,7 @@ install_nvtop() {
 # 10. Install CUDA
 install_cuda_toolkit() {
     print_info "Installing CUDA..."
-    read -p "Do you want to install gcc? [Y/n]: " install_gcc
-    if [[ "$install_gcc" != "n" && "$install_gcc" != "N" ]]; then
+    if [[ "$INSTALL_GCC" == "y" ]]; then
         print_info "Installing gcc..."
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc
@@ -681,7 +700,7 @@ install_local_llm() {
     if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
         print_info "Installing build dependencies for llama.cpp..."
         sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake ccache
         
         local cmake_flags="-DGGML_NATIVE=OFF"
         local export_cmd=""
@@ -711,7 +730,7 @@ install_local_llm() {
         print_success "llama.cpp built successfully."
         
         print_info "Installing llama.cpp globally for all users..."
-        sudo bash -c "cd \"$TARGET_USER_HOME/llama.cpp\" && cmake --install build --prefix /usr/local"
+        sudo bash -c "cd \"$TARGET_USER_HOME/llama.cpp\" && cmake --install build --prefix /usr/local && ldconfig"
         print_success "llama.cpp installed globally to /usr/local/bin."
 
         echo ""
@@ -1071,11 +1090,72 @@ print_final_summary() {
     local unique_actions
     unique_actions=$(echo "${POST_INSTALL_ACTIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
 
-    print_header "Installation Verification & Versions"
+    print_header "Installed Components & Verification"
+
+    echo -e "\e[1;36mInstalled Options:\e[0m"
+    for i in "${!MASTER_OPTIONS[@]}"; do
+        if [[ ${MASTER_INSTALLED_STATE[$i]} -eq 1 || ${MASTER_SELECTIONS[$i]} -eq 1 ]]; then
+            echo "  - ${MASTER_OPTIONS[$i]}"
+        fi
+    done
+    echo ""
+
+    # User environment helpers
+    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+    local brew_cmd="[ -f /home/linuxbrew/.linuxbrew/bin/brew ] && eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""
+
+    if [ -d "$TARGET_USER_HOME/.oh-my-zsh" ]; then
+        print_info "Zsh / Oh My Zsh:"
+        zsh --version || echo "Installed"
+        echo ""
+    fi
+
+    if command -v python3 &> /dev/null; then
+        print_info "Python:"
+        python3 --version
+        echo ""
+    fi
+
+    if command -v docker &> /dev/null; then
+        print_info "Docker:"
+        docker --version
+        echo ""
+    fi
+
+    if sudo test -s "$TARGET_USER_HOME/.nvm/nvm.sh"; then
+        print_info "Node.js & NPM (via NVM):"
+        sudo -u "$TARGET_USER" bash -c "$nvm_cmd; echo -n 'Node: '; node -v; echo -n 'NPM: '; npm -v"
+        echo ""
+    fi
+
+    if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+        print_info "Homebrew:"
+        sudo -u "$TARGET_USER" bash -c "$brew_cmd; brew --version | head -n 1"
+        echo ""
+    fi
+
+    if sudo -u "$TARGET_USER" bash -c "$nvm_cmd; command -v gemini" &> /dev/null; then
+        print_info "Google Gemini CLI:"
+        sudo -u "$TARGET_USER" bash -c "$nvm_cmd; gemini --version 2>/dev/null || echo 'Installed'"
+        echo ""
+    fi
 
     if command -v nvidia-smi &> /dev/null; then
         print_info "NVIDIA GPU/vGPU Driver:"
-        nvidia-smi
+        nvidia-smi --query-gpu=driver_version,name --format=csv,noheader || nvidia-smi
+        nvidia-smi -q | grep -i "license" || true
+        echo ""
+    fi
+
+    if command -v btop &> /dev/null; then
+        print_info "btop (System Monitor):"
+        btop --version | head -n 1
+        echo ""
+    fi
+
+    if command -v nvtop &> /dev/null; then
+        print_info "nvtop (GPU Monitor):"
+        nvtop --version
         echo ""
     fi
 
@@ -1091,9 +1171,35 @@ print_final_summary() {
         echo ""
     fi
 
-    if dpkg -l | grep -q libcudnn; then
+    if dpkg -l | grep -E -q 'cudnn|libcudnn'; then
         print_info "cuDNN Library:"
-        dpkg -l | grep libcudnn
+        dpkg -l | grep -E 'cudnn|libcudnn'
+        echo ""
+    fi
+
+    if command -v ollama &> /dev/null; then
+        print_info "Ollama:"
+        ollama --version
+        echo ""
+    fi
+
+    if command -v llama-server &> /dev/null; then
+        print_info "llama.cpp:"
+        echo "llama-server installed at $(which llama-server)"
+        echo ""
+    fi
+
+    if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then
+        print_info "Open-WebUI (Docker):"
+        local webui_status
+        webui_status=$(sudo docker inspect -f '{{.State.Status}}' open-webui)
+        echo "Status: $webui_status"
+        echo ""
+    fi
+
+    if [ -f "$TARGET_USER_HOME/.local/bin/openclaw" ]; then
+        print_info "OpenClaw:"
+        sudo -u "$TARGET_USER" bash -c "export PATH=\"$TARGET_USER_HOME/.local/bin:\$PATH\"; openclaw --version 2>/dev/null || echo 'Installed'"
         echo ""
     fi
 
@@ -1304,6 +1410,32 @@ main() {
             if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 1 ]]; then
                 echo -e "\nOption $((choice)) is already installed." && sleep 1
             else
+                # Sub-menu for CUDA (index 10)
+                if [[ $master_index -eq 10 && ${MASTER_SELECTIONS[10]} -eq 0 ]]; then
+                    INSTALL_GCC="n"
+                    local opt_selections=(0)
+                    while true; do
+                        clear
+                        echo -e "\n\e[1;36mConfigure Additional Options:\e[0m"
+                        if [[ ${opt_selections[0]} -eq 1 ]]; then
+                            echo -e " \e[1;32m[x]\e[0m 1. Install gcc compiler?"
+                        else
+                            echo -e " [ ] 1. Install gcc compiler?"
+                        fi
+                        echo "---------------------------------"
+                        echo "Use numbers [1] to toggle. Press 'c' to confirm."
+                        read -p "Your choice: " opt_choice
+                        if [[ "$opt_choice" == "1" ]]; then
+                            opt_selections[0]=$((1 - opt_selections[0]))
+                        elif [[ "$opt_choice" == "c" || "$opt_choice" == "C" ]]; then
+                            break
+                        else
+                            echo -e "\nInvalid option." && sleep 1
+                        fi
+                    done
+                    [[ ${opt_selections[0]} -eq 1 ]] && INSTALL_GCC="y"
+                fi
+
                 # Sub-menu for Local LLM Stack (index 13)
                 if [[ $master_index -eq 13 && ${MASTER_SELECTIONS[13]} -eq 0 ]]; then
                     LLM_BACKEND_CHOICE=""
@@ -1405,6 +1537,9 @@ main() {
                     INSTALL_OPENWEBUI="n"
                     TEST_LLAMACPP="n"
                     OLLAMA_PULL_MODEL=""
+                fi
+                if [[ $master_index -eq 10 && ${MASTER_SELECTIONS[10]} -eq 0 ]]; then
+                    INSTALL_GCC="n"
                 fi
 
                 # Dependency logic: Gemini CLI (index 6) and OpenClaw (index 14) require NVM (index 4)
