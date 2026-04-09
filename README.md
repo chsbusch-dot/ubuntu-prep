@@ -8,10 +8,11 @@ This script automates the setup and preparation of a fresh Ubuntu LTS system. It
 - **Multi-User Support**: Install user-specific tools to your current user or seamlessly create and configure a new dedicated standard user.
 - **System Initialization**: Updates and upgrades all system packages.
 - **Zsh & Oh My Zsh**: Installs Zsh, Oh My Zsh, and essential plugins (`zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-history-substring-search`).
-- **Developer Tools**: Installs `git`, `tmux`, `curl`, `wget`, and `micro`.
+- **Developer Tools**: Installs `git`, `tmux`, `curl`, `wget`, `micro`, and the `gcc` compiler.
 - **Python Environment**: Sets up `python3`, `pip`, and `venv` along with necessary build tools.
 - **Docker**: Installs the latest versions of Docker CE, Docker Compose, and configures user permissions.
 - **Node.js Environment**: Installs `nvm` (Node Version Manager) and the latest LTS release of Node.js.
+- **Homebrew**: Installs the Homebrew package manager for Linux.
 - **NVIDIA Stack**:
     - Installs the NVIDIA vGPU guest drivers via direct download URL or Google Drive sharing link.
     - Optionally installs `btop` and `nvtop` for system and GPU monitoring.

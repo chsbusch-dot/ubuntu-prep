@@ -460,6 +460,7 @@ EOF
         echo -e "\n${brew_env_str}" | sudo tee -a "$TARGET_USER_HOME/.bashrc" > /dev/null
     fi
     print_success "Homebrew installed."
+    POST_INSTALL_ACTIONS+=("brew")
 }
 
 # 6. Install Google Gemini CLI
@@ -727,7 +728,7 @@ EOF
     export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
 
     print_success "CUDA Toolkit installed."
-    POST_INSTALL_ACTIONS+=("nvm") # Re-use 'nvm' flag to trigger the "new terminal" message
+    POST_INSTALL_ACTIONS+=("cuda")
 }
 
 # 11. Install gcc compiler
@@ -1183,7 +1184,7 @@ EOF
     print_success "UFW rules configured."
 
     print_success "OpenClaw installation complete."
-    POST_INSTALL_ACTIONS+=("nvm" "ufw") # Modifies path, needs same action as nvm
+    POST_INSTALL_ACTIONS+=("openclaw" "ufw")
 }
 
 # --- Installation Checks ---
@@ -1542,7 +1543,7 @@ print_final_summary() {
     if [[ "$unique_actions" == *"zsh"* ]]; then shell_changed=1; fi
 
     local path_changed=0
-    if [[ "$unique_actions" == *"nvm"* ]]; then path_changed=1; fi
+    if [[ "$unique_actions" == *"nvm"* || "$unique_actions" == *"brew"* || "$unique_actions" == *"cuda"* || "$unique_actions" == *"openclaw"* ]]; then path_changed=1; fi
 
     if [[ "$unique_actions" == *"docker"* ]]; then
         print_info "To use Docker without 'sudo' IMMEDIATELY in this terminal, run: newgrp docker"
