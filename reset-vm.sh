@@ -37,9 +37,14 @@ echo "Connecting to $ESXI_HOST as $ESXI_USER to reset target: $TARGET_VM..."
 
 if [ -n "$ESXI_PASSWORD" ]; then
     if ! command -v sshpass &> /dev/null; then
-        echo "❌ Error: 'sshpass' utility is required when passing passwords via .env.secrets."
-        echo "Please install it by running: sudo apt-get install -y sshpass"
-        exit 1
+        echo "⚠️ 'sshpass' utility is not installed but required for password authentication."
+        echo "Attempting to install 'sshpass' automatically..."
+        if sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y sshpass; then
+            echo "✅ 'sshpass' installed successfully."
+        else
+            echo "❌ Error: Failed to install 'sshpass'. Please install it manually by running: sudo apt-get install -y sshpass"
+            exit 1
+        fi
     fi
     export SSHPASS="$ESXI_PASSWORD"
     SSH_CMD="sshpass -e ssh -T -o StrictHostKeyChecking=accept-new"
