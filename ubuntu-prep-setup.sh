@@ -357,6 +357,37 @@ EOF
     POST_INSTALL_ACTIONS+=("nvm")
 }
 
+# 5. Install Homebrew
+install_homebrew() {
+    print_header "Installing Homebrew"
+    print_info "Running Homebrew installation script..."
+    sudo -u "$TARGET_USER" bash -c "NONINTERACTIVE=1 /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    
+    local brew_env_str
+    brew_env_str=$(cat <<'EOF'
+# Homebrew Configuration
+eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+EOF
+)
+    if [ -f "$TARGET_USER_HOME/.zshrc" ] && ! sudo grep -q 'linuxbrew' "$TARGET_USER_HOME/.zshrc"; then
+        echo -e "\n${brew_env_str}" | sudo tee -a "$TARGET_USER_HOME/.zshrc" > /dev/null
+    fi
+    if [ -f "$TARGET_USER_HOME/.bashrc" ] && ! sudo grep -q 'linuxbrew' "$TARGET_USER_HOME/.bashrc"; then
+        echo -e "\n${brew_env_str}" | sudo tee -a "$TARGET_USER_HOME/.bashrc" > /dev/null
+    fi
+    print_success "Homebrew installed."
+}
+
+# 6. Install Google Gemini CLI
+install_gemini_cli_only() {
+    print_header "Installing Google Gemini CLI"
+    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+    
+    print_info "Installing Gemini CLI via NPM..."
+    sudo -u "$TARGET_USER" bash -c "$nvm_cmd; npm install -g @google/generative-ai-cli"
+    print_success "Google Gemini CLI installed."
+}
+
 # 7. Install NVIDIA vGPU Driver
 install_vgpu_driver_from_link() {
     print_header "Installing NVIDIA vGPU Driver from Direct Link"
@@ -589,12 +620,21 @@ install_local_llm() {
             elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then
                 sudo -u "$TARGET_USER" bash -c "$cmd_prefix --hf-repo bartowski/gemma-2-27b-it-GGUF --hf-file gemma-2-27b-it-Q4_K_M.gguf -ngl 99 -fa -c 16384 -np 1 --ctk q8_0 --ctv q8_0 -ub 512 -p \"<start_of_turn>user\\nDo not think. Explain why personal agency is a prerequisite for intelligence.<end_of_turn>\\n<start_of_turn>model\\n\""
             fi
+       fi
+
+ echo ""
+        local hf_args="--model /srv/models/llama.gguf"
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "1" ]]; then hf_args="--hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf"; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then hf_args="-m $TARGET_USER_HOME/Meta-Llama-3-8B-Instruct-Q6_K.gguf"; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then hf_args="-m $TARGET_USER_HOME/gemma-4-31b-it-Q4_K_M.gguf"; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" && -n "$LLAMACPP_MODEL_REPO" ]]; then hf_args="-hr \"$LLAMACPP_MODEL_REPO\""; fi
+
+        local llama_host_args="--port 8081"
+        if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
+            llama_host_args="--host 0.0.0.0 --port 8081"
         fi
 
-        echo ""
-        if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
-            read -p "Do you want to install llama.cpp as a background systemd service (survives reboots)? [y/N]: " install_llama_service
-            if [[ "$install_llama_service" == "y" || "$install_llama_service" == "Y" ]]; then
+        if [[ "$INSTALL_LLAMA_SERVICE" == "y" ]]; then
                 print_info "Creating llama-server systemd service..."
                 
                 local env_cuda=""
@@ -610,7 +650,7 @@ After=network.target
 [Service]
 User=$TARGET_USER
 $env_cuda
-ExecStart=/usr/local/bin/llama-server $llama_host_args
+ExecStart=/usr/local/bin/llama-server $hf_args $llama_host_args
 Restart=always
 RestartSec=3
 
@@ -620,15 +660,14 @@ EOF"
                 sudo systemctl daemon-reload
                 sudo systemctl enable --now llama-server
                 print_success "llama.cpp service installed and started on port 8081."
-            fi
         fi
 
         if [[ "$install_llamacpp_cuda" == "y" ]]; then
             print_info "To run the server manually, use a command like this (hiding the first compute device if needed):"
-            echo "CUDA_VISIBLE_DEVICES=\"-0\" llama-server --model /srv/models/llama.gguf $llama_host_args"
+            echo "CUDA_VISIBLE_DEVICES=\"-0\" llama-server $hf_args $llama_host_args"
         else
             print_info "To run the server manually, use a command like this:"
-            echo "llama-server --model /srv/models/llama.gguf $llama_host_args"
+            echo "llama-server $hf_args $llama_host_args"
         fi
     fi
 
@@ -1191,13 +1230,21 @@ main() {
                 EXPOSE_LLM_ENGINE="n"
                 LOAD_DEFAULT_MODEL="n"
                 LLM_DEFAULT_MODEL_CHOICE=""
+                INSTALL_LLAMA_SERVICE="n"
                 
-                local opt_selections=(0 0 0)
                 local opt_options=(
                     "Install open Web UI?"
                     "Expose ${LLM_BACKEND_CHOICE} on 0.0.0.0?"
                     "Load default model?"
                 )
+
+                if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
+                    opt_options+=("Install llama.cpp model as system service?")
+                fi
+
+                local opt_selections=()
+                for ((i=0; i<${#opt_options[@]}; i++)); do opt_selections+=(0); done
+
                 while true; do
                     clear
                     echo -e "\n\e[1;36mConfigure Additional Options:\e[0m"
@@ -1209,9 +1256,9 @@ main() {
                         fi
                     done
                     echo "---------------------------------"
-                    echo "Use numbers [1-3] to toggle. Press 'c' to confirm."
+                    echo "Use numbers [1-${#opt_options[@]}] to toggle. Press 'c' to confirm."
                     read -p "Your choice: " opt_choice
-                    if [[ "$opt_choice" =~ ^[1-3]$ ]]; then
+                    if [[ "$opt_choice" =~ ^[0-9]+$ ]] && [ "$opt_choice" -ge 1 ] && [ "$opt_choice" -le ${#opt_options[@]} ]; then
                         local idx=$((opt_choice - 1))
                         opt_selections[$idx]=$((1 - opt_selections[$idx]))
                     elif [[ "$opt_choice" == "c" || "$opt_choice" == "C" ]]; then
@@ -1224,6 +1271,7 @@ main() {
                 [[ ${opt_selections[0]} -eq 1 ]] && INSTALL_OPENWEBUI="y"
                 [[ ${opt_selections[1]} -eq 1 ]] && EXPOSE_LLM_ENGINE="y"
                 [[ ${opt_selections[2]} -eq 1 ]] && LOAD_DEFAULT_MODEL="y"
+                if [[ ${#opt_options[@]} -eq 4 && ${opt_selections[3]} -eq 1 ]]; then INSTALL_LLAMA_SERVICE="y"; fi
 
                 if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
                     echo -e "\n\e[1;36mSelect a default model to load:\e[0m"
@@ -1236,8 +1284,11 @@ main() {
                     if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" && "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
                         read -p "Enter an Ollama model name to pull (e.g., 'llama3', 'mistral'): " OLLAMA_PULL_MODEL
                     elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" && ("$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda") ]]; then
-                        read -p "Enter HuggingFace Repo (e.g., 'raincandy-u/TinyStories-656K-Q8_0-GGUF'): " LLAMACPP_MODEL_REPO
-                        read -p "Enter HuggingFace File (e.g., 'tinystories-656k-q8_0.gguf'): " LLAMACPP_MODEL_FILE
+                        echo -e "\n\e[1;36mThe llama-cli and llama-server tools can automatically download GGUF models from Hugging Face if you provide the repository name like this:"
+                        echo -e "  username/repository:quantization"
+                        echo -e "then load like this:"
+                        echo -e "  ./llama-cli -hr username/repository:quantization -p \"Your prompt here\"\e[0m\n"
+                        read -p "Enter HuggingFace string (e.g., 'raincandy-u/TinyStories-656K-Q8_0-GGUF:Q8_0'): " LLAMACPP_MODEL_REPO
                     fi
                 fi
                 fi
@@ -1392,6 +1443,14 @@ main() {
         
         if [[ "${POST_INSTALL_ACTIONS[*]}" == *"ufw"* || -n "$exposed_msg" ]]; then
             echo -e "\n\e[1;33mIMPORTANT: Firewall rules have been configured, but UFW is NOT enabled by default.\e[0m"
+            echo -e "\e[1;36mThe following UFW rules have been prepared:\e[0m"
+            echo "  - ALLOW 22/tcp (SSH)"
+            if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then echo "  - ALLOW 18789/tcp (OpenClaw Gateway)"; fi
+            if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
+                if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then echo "  - ALLOW 11434/tcp (Ollama API)"; else echo "  - ALLOW 8081/tcp (llama.cpp Server)"; fi
+            fi
+            if [[ "$INSTALL_OPENWEBUI" == "y" ]]; then echo "  - ALLOW 8080/tcp (Open-WebUI)"; fi
+            echo ""
             read -p "Do you want to enable the UFW firewall now? (WARNING: Ensure SSH access is allowed if remote) [y/N]: " enable_ufw
             if [[ "$enable_ufw" == "y" || "$enable_ufw" == "Y" ]]; then
                 sudo ufw default deny incoming &>/dev/null || true
@@ -1423,6 +1482,15 @@ main() {
         echo -e "\e[1;32m================================================================\e[0m\n"
     else
         print_info "No options were selected for installation."
+    fi
+
+    if [[ "${POST_INSTALL_ACTIONS[*]}" == *"reboot"* ]]; then
+        echo -e "\n\e[1;33mA system reboot is highly recommended to ensure all drivers (like NVIDIA vGPU) are loaded correctly.\e[0m"
+        read -p "Do you want to reboot now? [y/N]: " reboot_choice
+        if [[ "$reboot_choice" == "y" || "$reboot_choice" == "Y" ]]; then
+            print_info "Rebooting system..."
+            sudo reboot
+        fi
     fi
 }
 
