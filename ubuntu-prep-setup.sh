@@ -23,7 +23,8 @@ HAS_NVIDIA_GPU=false
 GPU_STATUS=""
 LLM_BACKEND_CHOICE=""
 INSTALL_OPENWEBUI="n"
-TEST_LLAMACPP="n"
+LLAMACPP_MODEL_REPO=""
+LLAMACPP_MODEL_FILE=""
 OLLAMA_PULL_MODEL=""
 
 # --- Helper Functions ---
@@ -541,75 +542,106 @@ install_local_llm() {
     esac
 
     if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
-        local do_build="y"
-        if command -v llama-server &> /dev/null; then
-            print_info "llama.cpp is already installed globally."
-            read -p "Do you want to rebuild it from source? (e.g., to update or change CPU/CUDA support) [y/N]: " rebuild_llama
-            if [[ "$rebuild_llama" != "y" && "$rebuild_llama" != "Y" ]]; then
-                do_build="n"
-                print_info "Skipping llama.cpp compilation."
-            fi
-        fi
+        print_info "Installing build dependencies for llama.cpp..."
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake
+        
+        local cmake_flags="-DGGML_NATIVE=OFF"
+        local export_cmd=""
 
-        if [[ "$do_build" == "y" ]]; then
-            print_info "Installing build dependencies for llama.cpp..."
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake
-            
-            local cmake_flags="-DGGML_NATIVE=OFF"
-            local export_cmd=""
-
-            if [[ "$install_llamacpp_cuda" == "y" ]]; then
-                echo -e "\n\e[1;33m1. Lookup the Compute Capability of your NVIDIA devices:\e[0m"
-                echo "   CUDA: Lookup Your GPU Compute > https://developer.nvidia.com/cuda-gpus and enter as digits without separator (8.6 -> 86)"
-                read -p "Enter compute capability as integer [86]: " compute_cap
-                compute_cap=${compute_cap:-86}
-                cmake_flags="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=\"$compute_cap\""
-                export_cmd="export CUDA_HOME=\"/usr/local/cuda\"; export PATH=\"\$CUDA_HOME/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\$CUDA_HOME/lib64:\$CUDA_HOME/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\";"
-                print_info "Cloning and building llama.cpp with CUDA support..."
-            else
-                print_info "Cloning and building llama.cpp with CPU support..."
-            fi
-
-            sudo -u "$TARGET_USER" bash -c "
-                cd \"$TARGET_USER_HOME\"
-                if [ ! -d llama.cpp ]; then
-                    git clone https://github.com/ggerganov/llama.cpp
-                fi
-                cd llama.cpp
-                $export_cmd
-                cmake -B build $cmake_flags
-                cmake --build build --config Release -j \$(nproc)
-            "
-            print_success "llama.cpp built successfully."
-            
-            print_info "Installing llama.cpp globally for all users..."
-            sudo bash -c "cd \"$TARGET_USER_HOME/llama.cpp\" && cmake --install build --prefix /usr/local"
-            # Ensure the system dynamic linker knows about the newly installed shared libraries
-            echo -e "/usr/local/lib\n/usr/local/lib64" | sudo tee /etc/ld.so.conf.d/usr-local-libs.conf > /dev/null
-            sudo ldconfig
-            print_success "llama.cpp installed globally to /usr/local/bin."
-        fi
-
-        echo ""
-        if [[ "$TEST_LLAMACPP" == "y" || "$TEST_LLAMACPP" == "Y" ]]; then
-            print_info "Downloading and running TinyStories model..."
-            sudo -u "$TARGET_USER" bash -c "export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128"
-        fi
-
-        echo ""
         if [[ "$install_llamacpp_cuda" == "y" ]]; then
-            print_info "To run the server, use a command like this (hiding the first compute device if needed):"
-            echo 'CUDA_VISIBLE_DEVICES="-0" llama-server --model /srv/models/llama.gguf --host 0.0.0.0 --port 8080'
+            echo -e "\n\e[1;33m1. Lookup the Compute Capability of your NVIDIA devices:\e[0m"
+            echo "   CUDA: Lookup Your GPU Compute > https://developer.nvidia.com/cuda-gpus and enter as digits without separator (8.6 -> 86)"
+            read -p "Enter compute capability as integer [86]: " compute_cap
+            compute_cap=${compute_cap:-86}
+            cmake_flags="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=\"$compute_cap\""
+            export_cmd="export CUDA_HOME=\"/usr/local/cuda\"; export PATH=\"\$CUDA_HOME/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\$CUDA_HOME/lib64:\$CUDA_HOME/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\";"
+            print_info "Cloning and building llama.cpp with CUDA support..."
         else
-            print_info "To run the server, use a command like this:"
-            echo 'llama-server --model /srv/models/llama.gguf --host 0.0.0.0 --port 8080'
+            print_info "Cloning and building llama.cpp with CPU support..."
+        fi
+
+        sudo -u "$TARGET_USER" bash -c "
+            cd \"$TARGET_USER_HOME\"
+            if [ ! -d llama.cpp ]; then
+                git clone https://github.com/ggerganov/llama.cpp
+            fi
+            cd llama.cpp
+            $export_cmd
+            cmake -B build $cmake_flags
+            cmake --build build --config Release -j $(nproc)
+        "
+        print_success "llama.cpp built successfully."
+        
+        print_info "Installing llama.cpp globally for all users..."
+        sudo bash -c "cd \"$TARGET_USER_HOME/llama.cpp\" && cmake --install build --prefix /usr/local"
+        print_success "llama.cpp installed globally to /usr/local/bin."
+
+        echo ""
+        if [[ -n "$LLAMACPP_MODEL_REPO" && -n "$LLAMACPP_MODEL_FILE" ]]; then
+            print_info "Downloading and running $LLAMACPP_MODEL_FILE..."
+            sudo -u "$TARGET_USER" bash -c "export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli --hf-repo \"$LLAMACPP_MODEL_REPO\" --hf-file \"$LLAMACPP_MODEL_FILE\" -p \"Once upon a time,\" -n 128"
+        fi
+
+        echo ""
+        if [[ -n "$LLAMACPP_MODEL_REPO" && -n "$LLAMACPP_MODEL_FILE" ]]; then
+            read -p "Do you want to install llama.cpp as a background systemd service (survives reboots)? [y/N]: " install_llama_service
+            if [[ "$install_llama_service" == "y" || "$install_llama_service" == "Y" ]]; then
+                print_info "Creating llama-server systemd service..."
+                
+                local env_cuda=""
+                if [[ "$install_llamacpp_cuda" == "y" ]]; then
+                    env_cuda="Environment=\"CUDA_VISIBLE_DEVICES=-0\"\nEnvironment=\"LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64\""
+                fi
+
+                sudo bash -c "cat <<EOF > /etc/systemd/system/llama-server.service
+[Unit]
+Description=Llama.cpp Server
+After=network.target
+
+[Service]
+User=$TARGET_USER
+$env_cuda
+ExecStart=/usr/local/bin/llama-server --hf-repo $LLAMACPP_MODEL_REPO --hf-file $LLAMACPP_MODEL_FILE --host 0.0.0.0 --port 8081
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF"
+                sudo systemctl daemon-reload
+                sudo systemctl enable --now llama-server
+                print_success "llama.cpp service installed and started on port 8081."
+            fi
+        fi
+
+        local server_hint_args="--model /srv/models/llama.gguf"
+        if [[ -n "$LLAMACPP_MODEL_REPO" ]]; then
+            server_hint_args="--hf-repo $LLAMACPP_MODEL_REPO --hf-file $LLAMACPP_MODEL_FILE"
+        fi
+
+        if [[ "$install_llamacpp_cuda" == "y" ]]; then
+            print_info "To run the server manually, use a command like this (hiding the first compute device if needed):"
+            echo "CUDA_VISIBLE_DEVICES=\"-0\" llama-server $server_hint_args --host 0.0.0.0 --port 8081"
+        else
+            print_info "To run the server manually, use a command like this:"
+            echo "llama-server $server_hint_args --host 0.0.0.0 --port 8081"
         fi
     fi
 
     if [[ "$install_ollama" == "y" || "$install_ollama" == "Y" ]]; then
         print_info "Installing Ollama..."
         curl -fsSL https://ollama.com/install.sh | sh
+
+        read -p "Do you want to allow external access to Ollama (bind to 0.0.0.0)? [y/N]: " allow_ext
+        if [[ "$allow_ext" == "y" || "$allow_ext" == "Y" ]]; then
+            print_info "Configuring Ollama for external access..."
+            sudo mkdir -p /etc/systemd/system/ollama.service.d
+            echo -e "[Service]\nEnvironment=\"OLLAMA_HOST=0.0.0.0\"" | sudo tee /etc/systemd/system/ollama.service.d/override.conf > /dev/null
+            sudo systemctl daemon-reload
+            sudo systemctl restart ollama
+            print_success "Ollama configured for external access."
+        fi
 
         print_info "Verifying Ollama service listening ports..."
         ss -antp | grep :11434 || true
@@ -650,7 +682,12 @@ install_local_llm() {
             if [[ "$HAS_NVIDIA_GPU" == true ]]; then
                 docker_cmd+=(--gpus all)
             fi
-            docker_cmd+=(-e OLLAMA_BASE_URL=http://127.0.0.1:11434 -v open-webui:/app/backend/data --name open-webui ghcr.io/open-webui/open-webui:main)
+            docker_cmd+=(-e OLLAMA_BASE_URL=http://127.0.0.1:11434)
+            if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
+                print_info "Configuring Open-WebUI to connect to llama.cpp backend..."
+                docker_cmd+=(-e OPENAI_API_BASE_URL=http://127.0.0.1:8081/v1 -e OPENAI_API_KEY=sk-llamacpp)
+            fi
+            docker_cmd+=(-v open-webui:/app/backend/data --name open-webui ghcr.io/open-webui/open-webui:main)
             
             "${docker_cmd[@]}"
             print_success "Open-WebUI installed and running on network host."
@@ -758,9 +795,9 @@ EOF
         # Use jq to safely update the JSON config file
         local tmp_json_file
         tmp_json_file=$(mktemp)
-        sudo jq '.gateway.port = 18789 | .gateway.controlUi.enabled = true' "$openclaw_config" > "$tmp_json_file" && \
+        sudo jq '.gateway.bind = "0.0.0.0" | .gateway.port = 18789 | .gateway.controlUi.enabled = true' "$openclaw_config" > "$tmp_json_file" && \
         sudo mv "$tmp_json_file" "$openclaw_config" && sudo chown "$TARGET_USER":"$TARGET_USER" "$openclaw_config"
-        print_success "OpenClaw gateway configured on port 18789."
+        print_success "OpenClaw gateway configured to bind to 0.0.0.0:18789."
     else
         echo "⚠️  OpenClaw config file not found at ${openclaw_config}. Skipping gateway configuration."
     fi
@@ -768,6 +805,7 @@ EOF
     print_info "Configuring firewall rules for OpenClaw (UFW)..."
     sudo ufw default deny incoming
     sudo ufw allow 22/tcp # Ensure SSH access is not blocked
+    sudo ufw allow 18789/tcp # Allow OpenClaw gateway access
     print_success "UFW rules configured."
 
     print_success "OpenClaw installation complete."
@@ -1210,11 +1248,96 @@ main() {
 
         print_success "Selected installations are complete."
         print_final_summary
+
+        # --- Expose Services Menu ---
+        local EXPOSE_OPTIONS=()
+        local EXPOSE_KEYS=()
+        local EXPOSE_SELECTIONS=()
+
+        if [ -f "$TARGET_USER_HOME/.openclaw/openclaw.json" ]; then
+            EXPOSE_OPTIONS+=("OpenClaw Gateway (Port 18789)")
+            EXPOSE_KEYS+=("openclaw")
+            EXPOSE_SELECTIONS+=(0)
+        fi
+        if command -v ollama &> /dev/null; then
+            EXPOSE_OPTIONS+=("Ollama API (Port 11434)")
+            EXPOSE_KEYS+=("ollama")
+            EXPOSE_SELECTIONS+=(0)
+        fi
+        if command -v llama-server &> /dev/null; then
+            EXPOSE_OPTIONS+=("Llama.cpp Server (Port 8081)")
+            EXPOSE_KEYS+=("llamacpp")
+            EXPOSE_SELECTIONS+=(0)
+        fi
+
+        local exposed_msg=""
+        if [ ${#EXPOSE_OPTIONS[@]} -gt 0 ]; then
+            while true; do
+                clear
+                echo -e "\n\e[1;36mSelect Services to Expose to the Network (Bind to 0.0.0.0):\e[0m"
+                for i in "${!EXPOSE_OPTIONS[@]}"; do
+                    if [[ ${EXPOSE_SELECTIONS[$i]} -eq 1 ]]; then
+                        echo -e " \e[1;32m[x]\e[0m $((i+1)). ${EXPOSE_OPTIONS[$i]}"
+                    else
+                        echo -e " [ ] $((i+1)). ${EXPOSE_OPTIONS[$i]}"
+                    fi
+                done
+                echo "---------------------------------"
+                echo "Use numbers [1-${#EXPOSE_OPTIONS[@]}] to toggle. Press 'a' to select all."
+                echo "Press 'c' to confirm and continue."
+                read -p "Your choice: " exp_choice
+                
+                if [[ "$exp_choice" =~ ^[0-9]+$ ]] && [ "$exp_choice" -ge 1 ] && [ "$exp_choice" -le ${#EXPOSE_OPTIONS[@]} ]; then
+                    local idx=$((exp_choice - 1))
+                    EXPOSE_SELECTIONS[$idx]=$((1 - EXPOSE_SELECTIONS[$idx]))
+                elif [[ "$exp_choice" == "a" || "$exp_choice" == "A" ]]; then
+                    for i in "${!EXPOSE_SELECTIONS[@]}"; do EXPOSE_SELECTIONS[$i]=1; done
+                elif [[ "$exp_choice" == "c" || "$exp_choice" == "C" ]]; then
+                    break
+                else
+                    echo -e "\nInvalid option." && sleep 1
+                fi
+            done
+
+            local applied_exposures=0
+            for i in "${!EXPOSE_KEYS[@]}"; do
+                if [[ ${EXPOSE_SELECTIONS[$i]} -eq 1 ]]; then
+                    if [[ $applied_exposures -eq 0 ]]; then print_info "Applying exposure settings..."; fi
+                    applied_exposures=1
+                    
+                    case "${EXPOSE_KEYS[$i]}" in
+                        "openclaw")
+                            local oc_conf="$TARGET_USER_HOME/.openclaw/openclaw.json"
+                            local tmp_json=$(mktemp)
+                            sudo jq '.gateway.bind = "0.0.0.0"' "$oc_conf" > "$tmp_json" && \
+                            sudo mv "$tmp_json" "$oc_conf" && sudo chown "$TARGET_USER":"$TARGET_USER" "$oc_conf"
+                            sudo ufw allow 18789/tcp &>/dev/null || true
+                            exposed_msg+="  - OpenClaw Gateway is at IP:18789\n"
+                            ;;
+                        "ollama")
+                            sudo mkdir -p /etc/systemd/system/ollama.service.d
+                            echo -e "[Service]\nEnvironment=\"OLLAMA_HOST=0.0.0.0\"" | sudo tee /etc/systemd/system/ollama.service.d/override.conf > /dev/null
+                            sudo systemctl daemon-reload
+                            sudo systemctl restart ollama
+                            sudo ufw allow 11434/tcp &>/dev/null || true
+                            exposed_msg+="  - Ollama is at IP:11434 (or 8081 if configured)\n"
+                            ;;
+                        "llamacpp")
+                            sudo ufw allow 8081/tcp &>/dev/null || true
+                            exposed_msg+="  - llama.cpp is at IP:8081\n"
+                            ;;
+                    esac
+                fi
+            done
+            if [[ $applied_exposures -eq 1 ]]; then print_success "Exposure settings applied."; fi
+        fi
         
-        if [[ "${POST_INSTALL_ACTIONS[*]}" == *"ufw"* ]]; then
-            echo -e "\n\e[1;33mIMPORTANT: Firewall rules for OpenClaw have been configured, but UFW is NOT enabled by default.\e[0m"
+        if [[ "${POST_INSTALL_ACTIONS[*]}" == *"ufw"* || -n "$exposed_msg" ]]; then
+            echo -e "\n\e[1;33mIMPORTANT: Firewall rules have been configured, but UFW is NOT enabled by default.\e[0m"
             read -p "Do you want to enable the UFW firewall now? (WARNING: Ensure SSH access is allowed if remote) [y/N]: " enable_ufw
             if [[ "$enable_ufw" == "y" || "$enable_ufw" == "Y" ]]; then
+                sudo ufw default deny incoming &>/dev/null || true
+                sudo ufw allow 22/tcp &>/dev/null || true
                 sudo ufw --force enable
                 print_success "UFW firewall enabled."
             else
@@ -1224,6 +1347,10 @@ main() {
 
         echo -e "\n\e[1;32m================================================================\e[0m"
         echo -e "\e[1;32mINSTALLATION COMPLETE!\e[0m"
+        if [[ -n "$exposed_msg" ]]; then
+            echo -e "\n\e[1;36mNetwork Services Exposed:\e[0m"
+            echo -e "$exposed_msg"
+        fi
         if [[ "$IS_DIFFERENT_USER" == true ]]; then
             echo -e "\e[1;33mPlease switch to your new user (\e[1;36m$TARGET_USER\e[1;33m) and run the following command to activate your environment:\e[0m"
             echo -e "\e[1;36msu - $TARGET_USER\e[0m"
