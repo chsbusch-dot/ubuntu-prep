@@ -713,10 +713,12 @@ install_container_toolkit() {
         print_info "Configuring Docker to use NVIDIA runtime..."
         sudo nvidia-ctk runtime configure --runtime=docker
         sudo systemctl restart docker || echo "⚠️ Could not restart Docker service."
+        
+        sleep 3 # Give Docker a moment to fully initialize its network bridges
 
         print_info "Testing NVIDIA Container Toolkit (this may download a container image)..."
-        sudo docker run --rm --gpus all ubuntu:22.04 nvidia-smi || \
-            echo "⚠️ Docker NVIDIA test failed. A reboot is likely required to load the NVIDIA drivers."
+        sudo docker run --rm --gpus all ubuntu:24.04 nvidia-smi || \
+            echo "⚠️ Docker NVIDIA test failed. A reboot is likely required to load the NVIDIA drivers, or your network may be experiencing IPv6 routing issues."
     else
         print_info "Docker is not installed. Skipping Docker runtime configuration."
     fi
