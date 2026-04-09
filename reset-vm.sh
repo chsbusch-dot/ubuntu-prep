@@ -87,9 +87,14 @@ $SSH_CMD "${ESXI_USER}@${ESXI_HOST}" << EOF
         exit 1
     fi
 
-    echo "🔄 Reverting VM to Snapshot ID: \$SNAPSHOT_ID and powering it on..."
-    # The trailing '0' tells ESXi to automatically power on the VM after reverting
+    echo "🔄 Reverting VM to Snapshot ID: \$SNAPSHOT_ID..."
     vim-cmd vmsvc/snapshot.revert "\$VMID" "\$SNAPSHOT_ID" 0
+
+    # Check power state and explicitly power on if it is currently off
+    if vim-cmd vmsvc/power.getstate "\$VMID" | grep -iq "Powered off"; then
+        echo "⚡ Powering on the VM..."
+        vim-cmd vmsvc/power.on "\$VMID" > /dev/null
+    fi
 
     echo "🎉 VM '\$VM_NAME' successfully reset and ready."
 EOF
