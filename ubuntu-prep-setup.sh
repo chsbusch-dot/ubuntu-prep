@@ -43,6 +43,7 @@ EXPOSE_LLM_ENGINE="n"
 EXPOSE_LLAMA_SERVER="n"
 LOAD_DEFAULT_MODEL="n"
 LLM_DEFAULT_MODEL_CHOICE=""
+SELECTED_MODEL_REPO=""
 
 # --- Helper Functions ---
 
@@ -533,11 +534,12 @@ install_vgpu_driver_from_link() {
             while true; do
                 sleep 15
                 elapsed=$((elapsed + 15))
-                echo -e "\e[1;36mℹ️ Still working on driver installation... ($elapsed seconds elapsed)\e[0m"
+                echo -e "\r\e[1;36mℹ️ Still building DKMS module... ($elapsed seconds elapsed)\e[0m"
             done
         ) &
         local spinner_pid=$!
 
+        print_info "Note: The 'Building initial module...' step takes about 4 minutes to complete. Please wait..."
         sudo dpkg -i "$downloaded_file_path" || sudo apt-get -f install -y
         
         kill "$spinner_pid" 2>/dev/null || true
@@ -778,15 +780,28 @@ install_local_llm() {
 
         echo ""
         local hf_args="--model /srv/models/llama.gguf"
-        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "1" ]]; then hf_args="--hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf"; fi
-        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then hf_args="--hf-repo QuantFactory/Meta-Llama-3-8B-Instruct-GGUF --hf-file Meta-Llama-3-8B-Instruct.Q6_K.gguf"; fi
-        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then hf_args="--hf-repo bartowski/gemma-2-27b-it-GGUF --hf-file gemma-2-27b-it-Q4_K_M.gguf"; fi
-        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" && -n "$LLAMACPP_MODEL_REPO" ]]; then hf_args="-hr \"$LLAMACPP_MODEL_REPO\""; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "5" ]]; then hf_args="--hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf"; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" =~ ^[1-4]$ ]]; then hf_args="-hr \"$SELECTED_MODEL_REPO\""; fi
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && -n "$LLAMACPP_MODEL_REPO" ]]; then hf_args="-hr \"$LLAMACPP_MODEL_REPO\""; fi
 
         if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
             print_info "Pulling selected model..."
             local cmd_prefix="export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
-            sudo -u "$TARGET_USER" bash -c "$cmd_prefix $hf_args -ngl 0 -n 1 -p \"Ready.\"" >/dev/null 2>&1 || true
+            
+            (
+                local elapsed=0
+                while true; do
+                    sleep 10
+                    elapsed=$((elapsed + 10))
+                    echo -e "\r\e[1;36mℹ️ Still downloading model... ($elapsed seconds elapsed)\e[0m"
+                done
+            ) &
+            local spinner_pid=$!
+
+            sudo -u "$TARGET_USER" bash -c "$cmd_prefix $hf_args -ngl 0 -n 1 -p \"Ready.\" < /dev/null" >/dev/null 2>&1 || true
+
+            kill "$spinner_pid" 2>/dev/null || true
+            wait "$spinner_pid" 2>/dev/null || true
         fi
 
         local llama_host_args="--port 8081"
@@ -847,10 +862,24 @@ EOF"
         echo ""
         if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
             print_info "Downloading and running default model..."
-            if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "1" ]]; then ollama run tinydolphin "Once upon a time,"
-            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then ollama run llama3 "Explain the relationship between entropy and personal agency in closed systems."
-            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then ollama run gemma2:27b "Do not think. Explain why personal agency is a prerequisite for intelligence."
+
+            (
+                local elapsed=0
+                while true; do
+                    sleep 10
+                    elapsed=$((elapsed + 10))
+                    echo -e "\r\e[1;36mℹ️ Still downloading model... ($elapsed seconds elapsed)\e[0m"
+                done
+            ) &
+            local spinner_pid=$!
+
+            if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "5" ]]; then ollama run tinydolphin "Once upon a time," < /dev/null >/dev/null 2>&1 || true
+            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" =~ ^[1-4]$ ]]; then ollama run "hf.co/$SELECTED_MODEL_REPO" "Hello, system check." < /dev/null >/dev/null 2>&1 || true
+            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && -n "$OLLAMA_PULL_MODEL" ]]; then ollama pull "$OLLAMA_PULL_MODEL" < /dev/null >/dev/null 2>&1 || true
             fi
+
+            kill "$spinner_pid" 2>/dev/null || true
+            wait "$spinner_pid" 2>/dev/null || true
         fi
     fi
 
@@ -891,6 +920,38 @@ EOF"
             
             "${docker_cmd[@]}"
             print_success "Open-WebUI installed and running on network host."
+
+            if [[ "$AUTO_UPDATE_OPENWEBUI" == "y" ]]; then
+                print_info "Configuring systemd to auto-update Open-WebUI on boot..."
+                sudo bash -c "cat <<EOF > /usr/local/bin/update-open-webui.sh
+#!/bin/bash
+sudo docker pull ghcr.io/open-webui/open-webui:main
+sudo docker stop open-webui 2>/dev/null || true
+sudo docker rm open-webui 2>/dev/null || true
+${docker_cmd[*]}
+EOF"
+                sudo chmod +x /usr/local/bin/update-open-webui.sh
+
+                sudo bash -c "cat <<EOF > /etc/systemd/system/open-webui-update.service
+[Unit]
+Description=Auto-update Open-WebUI Docker Container
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/update-open-webui.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF"
+                sudo systemctl daemon-reload
+                sudo systemctl enable open-webui-update.service
+                print_success "Open-WebUI auto-update service enabled."
+            fi
+
             print_info "NOTE: When you first open Open-WebUI, it will say 'Model not selected'."
             print_info "You must click the dropdown at the top of the screen to select your loaded model."
         fi
@@ -908,12 +969,14 @@ EOF"
             while true; do
                 sleep 10
                 elapsed=$((elapsed + 10))
-                echo -e "\e[1;36mℹ️ Still running inference test... ($elapsed seconds elapsed)\e[0m"
+                echo -e "\r\e[1;36mℹ️ Still running inference test... ($elapsed seconds elapsed)\e[0m"
             done
         ) &
         local spinner_pid=$!
 
-        sudo -u "$TARGET_USER" bash -c "$test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 -ngl 99" > "$tmp_out" 2>&1 || true
+        local ngl_test_args="-ngl 99"
+        if [[ "$install_llamacpp_cpu" == "y" ]]; then ngl_test_args="-ngl 0"; fi
+        sudo -u "$TARGET_USER" bash -c "$test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 $ngl_test_args < /dev/null" > "$tmp_out" 2>&1 || true
 
         kill "$spinner_pid" 2>/dev/null || true
         wait "$spinner_pid" 2>/dev/null || true
@@ -923,6 +986,10 @@ EOF"
 
         if [[ -n "$prompt_speed" && -n "$gen_speed" ]]; then
             print_success "llama.cpp test complete: [ Prompt: ${prompt_speed} t/s | Generation: ${gen_speed} t/s ]"
+            if [[ "$LLM_DEFAULT_MODEL_CHOICE" != "5" ]]; then
+                print_info "Cleaning up test model..."
+                sudo -u "$TARGET_USER" rm -rf "$TARGET_USER_HOME/.cache/huggingface/hub/models--raincandy-u--TinyStories-656K-Q8_0-GGUF"
+            fi
         else
             print_success "llama.cpp test complete."
         fi
@@ -946,6 +1013,12 @@ EOF"
 # 15. Install OpenClaw
 install_openclaw() {
     print_header "Installing OpenClaw"
+
+    if [[ "$IS_DIFFERENT_USER" == false ]]; then
+        echo "❌ OpenClaw cannot be installed for the current sudo user."
+        echo "Please run the script again and select '2. A different/new user' to create a dedicated standard user for OpenClaw."
+        return 1
+    fi
 
     local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
 
@@ -1312,7 +1385,17 @@ print_final_summary() {
 
     if command -v gemini &> /dev/null; then
         print_info "Google Gemini CLI:"
-        gemini --version | head -n 1 || echo "Installed"
+        local gemini_version
+        gemini_version=$(gemini --version < /dev/null 2>&1 | head -n 1)
+        echo "Installed Version: ${gemini_version:-Unknown}"
+        
+        print_info "Testing API connectivity..."
+        local gemini_cmd="[ -f \"$TARGET_USER_HOME/.env.secrets\" ] && source \"$TARGET_USER_HOME/.env.secrets\"; gemini -p \"hi\" --non-interactive < /dev/null"
+        if sudo -u "$TARGET_USER" bash -c "$gemini_cmd" >/dev/null 2>&1; then
+            print_success "API Response Successful. Gemini CLI is fully operational!"
+        else
+            echo "⚠️  API Test Failed. Check your GOOGLE_API_KEY environment variable."
+        fi
         echo ""
     fi
 
@@ -1635,6 +1718,8 @@ main() {
                 INSTALL_OPENWEBUI="n"
                 EXPOSE_LLM_ENGINE="n"
                 LOAD_DEFAULT_MODEL="n"
+                INSTALL_WATCHTOWER="n"
+                AUTO_UPDATE_MODEL="n"
                 LLM_DEFAULT_MODEL_CHOICE=""
                 INSTALL_LLAMA_SERVICE="n"
                 
@@ -1642,11 +1727,13 @@ main() {
                     "Install open Web UI?"
                     "Expose ${LLM_BACKEND_CHOICE} on 0.0.0.0?"
                     "Load default model?"
+                    "Auto-update selected model daily at 4 AM?"
+                    "Auto-update Open-WebUI via Watchtower (Daily at 4 AM)?"
                 )
 
                 if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
                     opt_options+=("Install llama.cpp model as system service?")
-                        opt_options+=("Open llama server to network?")
+                    opt_options+=("Open llama server to network?")
                 fi
 
                 local opt_selections=()
@@ -1678,22 +1765,111 @@ main() {
                 [[ ${opt_selections[0]} -eq 1 ]] && INSTALL_OPENWEBUI="y"
                 [[ ${opt_selections[1]} -eq 1 ]] && EXPOSE_LLM_ENGINE="y"
                 [[ ${opt_selections[2]} -eq 1 ]] && LOAD_DEFAULT_MODEL="y"
-                    if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
-                        [[ ${opt_selections[3]} -eq 1 ]] && INSTALL_LLAMA_SERVICE="y"
-                        [[ ${opt_selections[4]} -eq 1 ]] && EXPOSE_LLAMA_SERVER="y"
-                    fi
+                [[ ${opt_selections[3]} -eq 1 ]] && AUTO_UPDATE_MODEL="y"
+                [[ ${opt_selections[4]} -eq 1 ]] && INSTALL_WATCHTOWER="y"
+                if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
+                    [[ ${opt_selections[5]} -eq 1 ]] && INSTALL_LLAMA_SERVICE="y"
+                    [[ ${opt_selections[6]} -eq 1 ]] && EXPOSE_LLAMA_SERVER="y"
+                fi
+
+                if [[ "$INSTALL_WATCHTOWER" == "y" && "$INSTALL_OPENWEBUI" == "n" ]]; then
+                    INSTALL_OPENWEBUI="y"
+                    echo -e "\n[Auto-selected] Open-WebUI was selected because Watchtower auto-update requires it." && sleep 2
+                fi
 
                 if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
-                    echo -e "\n\e[1;36mSelect a default model to load:\e[0m"
-                    echo "  1. Tiny Model"
-                    echo "  2. Meta-Llama-3-8B-Instruct-Q6_K.gguf"
-                    echo "  3. Gemma 4"
-                    echo "  4. Specify a different model to download"
-                    read -p "Your choice [1-4]: " LLM_DEFAULT_MODEL_CHOICE
+                    local detected_ram_vram=0
+                    local memory_type="VRAM"
                     
-                    if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" && "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
+                    if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" ]]; then
+                        memory_type="System RAM"
+                        local ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+                        if [[ -n "$ram_kb" ]]; then
+                            detected_ram_vram=$((ram_kb / 1024 / 1024))
+                        fi
+                    else
+                        if command -v nvidia-smi &> /dev/null; then
+                            local vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | awk '{sum += $1} END {print sum}')
+                            if [[ -n "$vram_mb" ]]; then
+                                detected_ram_vram=$((vram_mb / 1024))
+                            fi
+                        fi
+                    fi
+                    
+                    local vram_tier="8"
+                    echo -e "\n\e[1;36mSelect your ${memory_type} tier for model recommendations:\e[0m"
+                    if [[ $detected_ram_vram -gt 0 ]]; then
+                        echo -e "Detected total ${memory_type}: \e[1;32m~${detected_ram_vram} GB\e[0m"
+                    fi
+                    echo "  1. 8 GB"
+                    echo "  2. 16 GB"
+                    echo "  3. 24 GB"
+                    echo "  4. 32 GB"
+                    echo "  5. 48 GB"
+                    echo "  6. 72 GB"
+                    echo "  7. 96 GB"
+                    read -p "Your choice [1-7]: " vram_choice
+                    case "$vram_choice" in
+                        1) vram_tier=8 ;;
+                        2) vram_tier=16 ;;
+                        3) vram_tier=24 ;;
+                        4) vram_tier=32 ;;
+                        5) vram_tier=48 ;;
+                        6) vram_tier=72 ;;
+                        7) vram_tier=96 ;;
+                        *) vram_tier=8 ;;
+                    esac
+                    
+                    local m_chat="" m_code="" m_moe="" m_vision=""
+                    case "$vram_tier" in
+                        8)  m_chat="unsloth/Qwen3.5-9B-it-GGUF"
+                            m_code="unsloth/Qwen3.5-Coder-9B-GGUF"
+                            m_moe="unsloth/Qwen3.5-MoE-4B-GGUF"
+                            m_vision="unsloth/gemma-4-E4B-it-GGUF" ;;
+                        16) m_chat="unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF"
+                            m_code="unsloth/Qwen3.5-Coder-14B-GGUF"
+                            m_moe="unsloth/Llama-4-Maverick-17B-128E-Instruct-GGUF"
+                            m_vision="unsloth/gemma-4-E4B-it-GGUF" ;;
+                        24) m_chat="unsloth/Mistral-Small-3.2-24B-Instruct-v1-GGUF"
+                            m_code="unsloth/Qwen3.5-Coder-27B-GGUF"
+                            m_moe="unsloth/Qwen3.5-35B-A3B-GGUF"
+                            m_vision="unsloth/Qwen3.5-VL-27B-GGUF" ;;
+                        32) m_chat="unsloth/gemma-4-31B-it-GGUF"
+                            m_code="unsloth/Qwen3.5-Coder-35B-GGUF"
+                            m_moe="unsloth/gemma-4-26B-A4B-it-GGUF"
+                            m_vision="unsloth/gemma-4-31B-it-GGUF" ;;
+                        48) m_chat="unsloth/Llama-4-70B-Instruct-GGUF"
+                            m_code="unsloth/Qwen3.5-Coder-70B-GGUF"
+                            m_moe="unsloth/DeepSeek-V3.1-Distill-Qwen-70B-GGUF"
+                            m_vision="unsloth/Qwen3.5-VL-72B-GGUF" ;;
+                        72) m_chat="unsloth/DeepSeek-V3.2-Exp-120B-GGUF"
+                            m_code="unsloth/Qwen3.5-Coder-70B-GGUF"
+                            m_moe="unsloth/Qwen3.5-122B-A10B-GGUF"
+                            m_vision="unsloth/InternVL3-78B-GGUF" ;;
+                        96) m_chat="unsloth/DeepSeek-V3.2-Exp-120B-GGUF"
+                            m_code="unsloth/Qwen3.5-Coder-120B-GGUF"
+                            m_moe="unsloth/Qwen3.5-122B-A10B-GGUF"
+                            m_vision="unsloth/Llama-3.2-90B-Vision-Instruct-GGUF" ;;
+                    esac
+                    
+                    echo -e "\n\e[1;36mSelect a default model to load (${vram_tier}GB Tier):\e[0m"
+                    echo "  1. General Chat:    $m_chat"
+                    echo "  2. Coding:          $m_code"
+                    echo "  3. MoE:             $m_moe"
+                    echo "  4. Vision-Language: $m_vision"
+                    echo "  5. Tiny Model (for quick testing)"
+                    echo "  6. Specify a different model to download"
+                    read -p "Your choice [1-6]: " LLM_DEFAULT_MODEL_CHOICE
+                    
+                    if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "1" ]]; then SELECTED_MODEL_REPO="$m_chat";
+                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then SELECTED_MODEL_REPO="$m_code";
+                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then SELECTED_MODEL_REPO="$m_moe";
+                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" ]]; then SELECTED_MODEL_REPO="$m_vision";
+                    fi
+                    
+                    if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
                         read -p "Enter an Ollama model name to pull (e.g., 'llama3', 'mistral'): " OLLAMA_PULL_MODEL
-                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" && ("$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda") ]]; then
+                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && ("$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda") ]]; then
                         echo -e "\n\e[1;36mThe llama-cli and llama-server tools can automatically download GGUF models from Hugging Face if you provide the repository name like this:"
                         echo -e "  username/repository:quantization"
                         echo -e "then load like this:"
@@ -1705,12 +1881,20 @@ main() {
 
                 MASTER_SELECTIONS[$master_index]=$((1 - MASTER_SELECTIONS[$master_index]))
 
+                if [[ $master_index -eq 15 && ${MASTER_SELECTIONS[15]} -eq 1 && "$IS_DIFFERENT_USER" == false ]]; then
+                    MASTER_SELECTIONS[15]=0
+                    echo -e "\n❌ [Blocked] OpenClaw cannot be installed for the current sudo user."
+                    echo -e "Please restart the script and select '2. A different/new user' at the beginning." && sleep 4
+                fi
+
                 if [[ $master_index -eq 14 && ${MASTER_SELECTIONS[14]} -eq 0 ]]; then
                     LLM_BACKEND_CHOICE=""
                     INSTALL_OPENWEBUI="n"
                     EXPOSE_LLAMA_SERVER="n"
                     TEST_LLAMACPP="n"
                     OLLAMA_PULL_MODEL=""
+                    SELECTED_MODEL_REPO=""
+                    AUTO_UPDATE_MODEL="n"
                 fi
 
                 # Dependency logic: Gemini CLI (index 6) and OpenClaw (index 15) require NVM (index 4)
@@ -1757,6 +1941,9 @@ main() {
         elif [[ "$choice" == "a" || "$choice" == "A" ]]; then
             for master_index in "${ACTIVE_INDICES[@]}"; do 
                 if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 0 ]]; then 
+                    if [[ $master_index -eq 15 && "$IS_DIFFERENT_USER" == false ]]; then
+                        continue
+                    fi
                     MASTER_SELECTIONS[$master_index]=1
                     if [[ $master_index -eq 14 && -z "$LLM_BACKEND_CHOICE" ]]; then LLM_BACKEND_CHOICE="ollama"; fi
                 fi
