@@ -1194,7 +1194,7 @@ main() {
                 
                 local opt_selections=(0 0 0)
                 local opt_options=(
-                    "Install Open-WebUI?"
+                    "Install open Web UI?"
                     "Expose ${LLM_BACKEND_CHOICE} on 0.0.0.0?"
                     "Load default model?"
                 )
@@ -1227,9 +1227,9 @@ main() {
 
                 if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
                     echo -e "\n\e[1;36mSelect a default model to load:\e[0m"
-                    echo "  1. Tiny Model (TinyStories 656K)"
-                    echo "  2. Meta-Llama-3-8B-Instruct"
-                    echo "  3. Gemma 4 (31b) [Gemma 2 27b]"
+                    echo "  1. Tiny Model"
+                    echo "  2. Meta-Llama-3-8B-Instruct-Q6_K.gguf"
+                    echo "  3. Gemma 4"
                     echo "  4. Specify a different model to download"
                     read -p "Your choice [1-4]: " LLM_DEFAULT_MODEL_CHOICE
                     
