@@ -700,9 +700,9 @@ install_local_llm() {
     if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
         print_info "Installing build dependencies for llama.cpp..."
         sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake ccache
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake ccache libcurl4-openssl-dev libssl-dev
         
-        local cmake_flags="-DGGML_NATIVE=OFF"
+        local cmake_flags="-DGGML_NATIVE=OFF -DLLAMA_CURL=ON"
         local export_cmd=""
 
         if [[ "$install_llamacpp_cuda" == "y" ]]; then
@@ -710,7 +710,7 @@ install_local_llm() {
             echo "   CUDA: Lookup Your GPU Compute > https://developer.nvidia.com/cuda-gpus and enter as digits without separator (8.6 -> 86)"
             read -p "Enter compute capability as integer [86]: " compute_cap
             compute_cap=${compute_cap:-86}
-            cmake_flags="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=\"$compute_cap\""
+            cmake_flags="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DCMAKE_CUDA_ARCHITECTURES=\"$compute_cap\""
             export_cmd="export CUDA_HOME=\"/usr/local/cuda\"; export PATH=\"\$CUDA_HOME/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\$CUDA_HOME/lib64:\$CUDA_HOME/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\";"
             print_info "Cloning and building llama.cpp with CUDA support..."
         else
