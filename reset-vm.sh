@@ -78,10 +78,17 @@ $SSH_CMD "${ESXI_USER}@${ESXI_HOST}" << EOF
     fi
 
     echo "✅ Found VM '\$VM_NAME' with ID: \$VMID"
-    echo "🔄 Reverting VM to the current snapshot..."
-    
-    # Revert to the current active snapshot (0 0 targets the current state)
-    vim-cmd vmsvc/snapshot.revert "\$VMID" 0 0
+
+    echo "🔍 Fetching snapshot ID..."
+    SNAPSHOT_ID=\$(vim-cmd vmsvc/snapshot.get "\$VMID" | grep -i "Snapshot Id" | tail -n 1 | awk -F':' '{print \$2}' | tr -d ' ')
+
+    if [ -z "\$SNAPSHOT_ID" ]; then
+        echo "❌ Error: No snapshots found for VM '\$VM_NAME'."
+        exit 1
+    fi
+
+    echo "🔄 Reverting VM to Snapshot ID: \$SNAPSHOT_ID..."
+    vim-cmd vmsvc/snapshot.revert "\$VMID" "\$SNAPSHOT_ID" 0 0
 
     # Check power state and power on if it is currently off
     if vim-cmd vmsvc/power.getstate "\$VMID" | grep -iq "Powered off"; then
