@@ -170,7 +170,7 @@ setup_env_secrets() {
 # export TAVILI_API_KEY=""
 # export NVIDIA_VGPU_DRIVER_URL="ftp://192.168.1.31/shared/.../nvidia.deb"
 # export NVIDIA_VGPU_TOKEN_URL="ftp://192.168.1.31/shared/.../token.tok"
-# export NVIDIA_VGPU_FTP_AUTH="admin:password"
+# export NVIDIA_VGPU_FTP_AUTH="admin:password" # Works for FTP, HTTP Basic Auth, and SMB
 EOF
         sudo chmod 600 "$TARGET_USER_HOME/.env.secrets"
     fi
@@ -423,7 +423,7 @@ install_vgpu_driver_from_link() {
 
     if [[ -z "$vgpu_driver_url" ]]; then
         print_info "Please provide the direct download URL OR a Google Drive sharing link for the vGPU driver."
-        print_info "Example FTP link: ftp://192.168.1.31/shared/.../nvidia.deb"
+        print_info "Supported protocols: http://, https://, ftp://, smb://"
         read -p "Enter the driver download URL: " vgpu_driver_url
     fi
 
@@ -559,8 +559,8 @@ install_vgpu_driver_from_link() {
                 
                 print_success "vGPU token installed successfully."
                 
-                print_info "Checking vGPU License Status (waiting 3 seconds for service to start)..."
-                sleep 3
+                print_info "Checking vGPU License Status (waiting 5 seconds for service to start)..."
+                sleep 5
                 nvidia-smi -q | grep -i "License Status" || true
                 nvidia-smi -q | grep -i "Feature" || true
             fi
@@ -635,13 +635,17 @@ install_container_toolkit() {
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
 
-    print_info "Configuring Docker to use NVIDIA runtime..."
-    sudo nvidia-ctk runtime configure --runtime=docker
-    sudo systemctl restart docker
+    if command -v docker &> /dev/null; then
+        print_info "Configuring Docker to use NVIDIA runtime..."
+        sudo nvidia-ctk runtime configure --runtime=docker
+        sudo systemctl restart docker || echo "⚠️ Could not restart Docker service."
 
-    print_info "Testing NVIDIA Container Toolkit (this may download a container image)..."
-    sudo docker run --rm --gpus all ubuntu:22.04 nvidia-smi || \
-        echo "⚠️ Docker NVIDIA test failed. A reboot is likely required to load the NVIDIA drivers."
+        print_info "Testing NVIDIA Container Toolkit (this may download a container image)..."
+        sudo docker run --rm --gpus all ubuntu:22.04 nvidia-smi || \
+            echo "⚠️ Docker NVIDIA test failed. A reboot is likely required to load the NVIDIA drivers."
+    else
+        print_info "Docker is not installed. Skipping Docker runtime configuration."
+    fi
 }
 
 # 12. Install cuDNN
@@ -1413,6 +1417,20 @@ main() {
                     fi
                 fi
 
+                # Dependency logic for vGPU Driver (index 7) requiring Docker (index 3)
+                if [[ $master_index -eq 7 && ${MASTER_SELECTIONS[7]} -eq 1 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then
+                    if [[ ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
+                        MASTER_SELECTIONS[3]=1
+                        ensure_active_index 3
+                        echo -e "\n[Auto-selected] Docker is required for vGPU Driver installation." && sleep 1.5
+                    fi
+                elif [[ $master_index -eq 3 && ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
+                    if [[ ${MASTER_SELECTIONS[7]} -eq 1 ]]; then
+                        MASTER_SELECTIONS[7]=0
+                        echo -e "\n[Auto-unselected] NVIDIA vGPU Driver was unselected because it requires Docker." && sleep 2
+                    fi
+                fi
+
                 # Dependency logic for Local LLM Stack (index 13)
                 if [[ $master_index -eq 13 && ${MASTER_SELECTIONS[13]} -eq 1 ]]; then
                     local auto_selected=""
@@ -1431,6 +1449,10 @@ main() {
                     if [[ $master_index -eq 11 && -z "$LLM_BACKEND_CHOICE" ]]; then LLM_BACKEND_CHOICE="ollama"; fi
                 fi
             done
+            if [[ ${MASTER_SELECTIONS[7]} -eq 1 && ${MASTER_INSTALLED_STATE[3]} -eq 0 && ${MASTER_SELECTIONS[3]} -eq 0 ]]; then
+                MASTER_SELECTIONS[3]=1
+                ensure_active_index 3
+            fi
         elif [[ "$choice" == "i" || "$choice" == "I" ]]; then
             break
         elif [[ "$choice" == "q" || "$choice" == "Q" ]]; then
