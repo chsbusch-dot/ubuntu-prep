@@ -10,12 +10,29 @@ The script features intuitive, keyboard-driven menus to easily customize your in
 ```text
 --- Ubuntu Prep Script Menu ---
 Hardware: NVIDIA GPU/vGPU Detected
-Target User: openclaw (/home/openclaw)
+Target User: chris (/home/chris)
+Use numbers [1-16] to toggle an option. Press 'a' to select all.
+Press 'i' to install selected, or 'q' to quit.
+---------------------------------
+ [x] 1. Update System Packages (apt update && upgrade) (Required)
+ [ ] 2. Install Oh My Zsh & Dev Tools (git, tmux, micro)
+ [ ] 3. Install Python Environment
+ [ ] 4. Install Docker and Docker Compose
+ [ ] 5. Install NVM, Node.js & NPM
+ [ ] 6. Install Homebrew
+ [ ] 7. Install Google Gemini CLI
 
-Select Installation Goals:
- [x] 1. OpenClaw Server Setup (Core tools, Docker, Node.js, OpenClaw)
- [x] 2. VGPU Setup (NVIDIA Driver, CUDA, Container Toolkit, cuDNN)
- [x] 3. Local LLM Setup (Ollama, llama.cpp, Open-WebUI, LibreChat)
+ [ ] 8. Install NVIDIA vGPU Driver
+ [ ] 9. Install btop (System Monitor)
+ [ ] 10. Install nvtop (GPU Monitor)
+ [ ] 11. Install CUDA
+ [✓] 12. Install gcc compiler
+ [ ] 13. Install NVIDIA Container Toolkit
+ [ ] 14. Install cuDNN
+
+ [ ] 15. Install Local LLM Support (Ollama, llama.cpp, Open-WebUI, LibreChat)
+
+ [ ] 16. Install OpenClaw
 ```
 
 **Hardware-Aware Configuration:**
