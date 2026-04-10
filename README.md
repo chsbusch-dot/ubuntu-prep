@@ -1,6 +1,6 @@
-# Ubuntu Local AI, Ollama, LLama.cpp & Openclaw Prep script
+# Ubuntu Local AI, Ollama, LLama.cpp & Openclaw Prep adn Installation script
 
-This script automates the setup and preparation of a fresh Ubuntu LTS system. It provides an interactive menu to install essential developer tools, software stacks, and configurations, turning a new OS into a ready-to-use AI development environment.
+This script automates the setup and configuration of a fresh Ubuntu LTS system to run Ollama aor LLama.cpp with CUDA, loads selects and loads the model and configures the Chat UIs. It provides an interactive menu to install essential developer tools, software stacks, and configurations, turning a new OS into a ready-to-use AI development environment.
 
 ## Features
 
@@ -69,6 +69,7 @@ nano ~/.env.secrets
 
 Paste:
 
+```bash
 # --- API Key Placeholders ---
 # Uncomment and fill in the values for the services you use.
 
@@ -88,6 +89,9 @@ Paste:
 # export ESXI_HOST="192.168.1.100"
 # export ESXI_USER="root"
 # export ESXI_PASSWORD="your_esxi_password"
+# export OLLAMA_ALLOWED_ORIGINS="https://chat.yourdomain.com,http://localhost:8081"
+# export SYSTEM_TIMEZONE="America/Los_Angeles"
+```
 
 ## License
 

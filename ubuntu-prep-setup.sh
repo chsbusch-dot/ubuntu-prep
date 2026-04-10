@@ -40,11 +40,92 @@ GPU_STATUS=""
 LLM_BACKEND_CHOICE=""
 INSTALL_OPENWEBUI="n"
 EXPOSE_LLM_ENGINE="n"
+EXPOSE_OPENCLAW="n"
+OPENCLAW_PORT="18789"
 EXPOSE_LLAMA_SERVER="n"
 LOAD_DEFAULT_MODEL="n"
 LLM_DEFAULT_MODEL_CHOICE=""
 SELECTED_MODEL_REPO=""
 ENABLE_UFW_AUTOMATICALLY="n"
+
+# --- Model Recommendations Configuration ---
+# Edit this function to quickly update the default models offered in the menu.
+get_model_recommendations() {
+    local backend="$1"
+    local vram="$2"
+    
+    REC_MODEL_CHAT=""
+    REC_MODEL_CODE=""
+    REC_MODEL_MOE=""
+    REC_MODEL_VISION=""
+# Edit this function to quickly update the default models offered for Ollama
+
+    if [[ "$backend" == "ollama" ]]; then
+        case "$vram" in
+            8)  REC_MODEL_CHAT="gemma4:e4b"
+                REC_MODEL_CODE="qwen2.5-coder:7b"
+                REC_MODEL_MOE="gemma4:e4b"
+                REC_MODEL_VISION="gemma4:e4b" ;;
+            16) REC_MODEL_CHAT="gemma4:e4b"
+                REC_MODEL_CODE="qwen2.5-coder:14b"
+                REC_MODEL_MOE="mixtral:8x7b"
+                REC_MODEL_VISION="llava:13b" ;;
+            24) REC_MODEL_CHAT="gemma4:26b-a4b"
+                REC_MODEL_CODE="qwen2.5-coder:32b"
+                REC_MODEL_MOE="gemma4:26b-a4b"
+                REC_MODEL_VISION="llava:34b" ;;
+            32) REC_MODEL_CHAT="gemma4:26b-a4b"
+                REC_MODEL_CODE="qwen2.5-coder:32b"
+                REC_MODEL_MOE="gemma4:26b-a4b"
+                REC_MODEL_VISION="gemma4:31b" ;;
+            48) REC_MODEL_CHAT="gemma4:31b"
+                REC_MODEL_CODE="qwen2.5:72b"
+                REC_MODEL_MOE="gemma4:26b-a4b"
+                REC_MODEL_VISION="gemma4:31b" ;;
+            72) REC_MODEL_CHAT="gemma4:31b"
+                REC_MODEL_CODE="qwen2.5:72b"
+                REC_MODEL_MOE="command-r-plus"
+                REC_MODEL_VISION="llava:34b" ;;
+            96) REC_MODEL_CHAT="gemma4:31b"
+                REC_MODEL_CODE="qwen2.5-coder:32b"
+                REC_MODEL_MOE="command-r-plus"
+                REC_MODEL_VISION="llava:34b" ;;
+        esac
+    else
+
+    # Edit this function to quickly update the default models offered for LLama.CPP
+        case "$vram" in
+            8)  REC_MODEL_CHAT="unsloth/gemma-4-E4B-it-GGUF"
+                REC_MODEL_CODE="Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
+                REC_MODEL_MOE="unsloth/gemma-4-E4B-it-GGUF"
+                REC_MODEL_VISION="unsloth/gemma-4-E4B-it-GGUF" ;;
+            16) REC_MODEL_CHAT="unsloth/gemma-4-E4B-it-GGUF"
+                REC_MODEL_CODE="Qwen/Qwen2.5-Coder-14B-Instruct-GGUF"
+                REC_MODEL_MOE="unsloth/Mixtral-8x7B-Instruct-v0.1-GGUF"
+                REC_MODEL_VISION="cjpais/llava-v1.6-vicuna-13b-gguf" ;;
+            24) REC_MODEL_CHAT="unsloth/gemma-4-26B-A4B-it-GGUF"
+                REC_MODEL_CODE="Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"
+                REC_MODEL_MOE="unsloth/gemma-4-26B-A4B-it-GGUF"
+                REC_MODEL_VISION="cjpais/llava-v1.6-34B-gguf" ;;
+            32) REC_MODEL_CHAT="unsloth/gemma-4-26B-A4B-it-GGUF"
+                REC_MODEL_CODE="Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"
+                REC_MODEL_MOE="unsloth/gemma-4-26B-A4B-it-GGUF"
+                REC_MODEL_VISION="unsloth/gemma-4-31B-it-GGUF" ;;
+            48) REC_MODEL_CHAT="unsloth/gemma-4-31B-it-GGUF"
+                REC_MODEL_CODE="Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"
+                REC_MODEL_MOE="unsloth/gemma-4-26B-A4B-it-GGUF"
+                REC_MODEL_VISION="unsloth/gemma-4-31B-it-GGUF" ;;
+            72) REC_MODEL_CHAT="unsloth/gemma-4-31B-it-GGUF"
+                REC_MODEL_CODE="Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"
+                REC_MODEL_MOE="unsloth/c4ai-command-r-plus-GGUF"
+                REC_MODEL_VISION="cjpais/llava-v1.6-34B-gguf" ;;
+            96) REC_MODEL_CHAT="unsloth/gemma-4-31B-it-GGUF"
+                REC_MODEL_CODE="Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"
+                REC_MODEL_MOE="unsloth/c4ai-command-r-plus-GGUF"
+                REC_MODEL_VISION="cjpais/llava-v1.6-34B-gguf" ;;
+        esac
+    fi
+}
 
 # --- Helper Functions ---
 
@@ -61,6 +142,13 @@ print_success() {
 # Function to print info messages
 print_info() {
     echo -e "\e[1;36mℹ️ $1\e[0m"
+}
+
+# Function to print the persistent status header
+print_status_header() {
+    echo -e "\n\e[1;35m--- Ubuntu Prep Script Menu ---\e[0m"
+    echo -e "Hardware: $GPU_STATUS"
+    echo -e "Target User: \e[1;36m$TARGET_USER\e[0m ($TARGET_USER_HOME)"
 }
 
 # Function to check if running as root
@@ -178,12 +266,52 @@ detect_gpu() {
     fi
 }
 
+# Function to configure system timezone
+configure_timezone() {
+    print_header "System Timezone Configuration"
+    local env_file="$TARGET_USER_HOME/.env.secrets"
+    local tz="America/Los_Angeles"
+
+    # Check if already defined in .env.secrets
+    if sudo test -f "$env_file"; then
+        local env_tz=$(sudo bash -c "source \"$env_file\" 2>/dev/null && echo \"\$SYSTEM_TIMEZONE\"" | tr -d '\r')
+        if [[ -n "$env_tz" ]]; then
+            tz="$env_tz"
+        fi
+    fi
+
+    read -p "Enter timezone (Continent/City) or press Enter to keep default [$tz]: " user_tz
+
+    if [[ -n "$user_tz" ]]; then
+        tz="$user_tz"
+    fi
+
+    print_info "Setting timezone to '$tz' and enabling NTP..."
+    if sudo timedatectl set-timezone "$tz" 2>/dev/null; then
+        sudo timedatectl set-ntp true 2>/dev/null || true
+        print_success "Timezone set to $tz and NTP synced."
+        export GLOBAL_SYSTEM_TIMEZONE="$tz"
+        
+        # If the secrets file already exists, update or append it
+        if sudo test -f "$env_file"; then
+            if sudo grep -q "SYSTEM_TIMEZONE" "$env_file"; then
+                sudo -u "$TARGET_USER" sed -i "s|^.*export SYSTEM_TIMEZONE=.*|export SYSTEM_TIMEZONE=\"$tz\"|" "$env_file"
+            else
+                echo "export SYSTEM_TIMEZONE=\"$tz\"" | sudo -u "$TARGET_USER" tee -a "$env_file" > /dev/null
+            fi
+        fi
+    else
+        echo -e "❌ \e[1;31mFailed to set timezone.\e[0m Ensure it is a valid format like 'America/Los_Angeles'."
+        export GLOBAL_SYSTEM_TIMEZONE="America/Los_Angeles"
+    fi
+}
+
 # Function to configure API keys for either bash or zsh
 setup_env_secrets() {
     print_header "Configuring API Keys"
     if [ ! -f "$TARGET_USER_HOME/.env.secrets" ]; then
         print_info "Creating ~/.env.secrets template for API keys..."
-        cat <<'EOF' | sudo -u "$TARGET_USER" tee "$TARGET_USER_HOME/.env.secrets" > /dev/null
+        cat <<EOF | sudo -u "$TARGET_USER" tee "$TARGET_USER_HOME/.env.secrets" > /dev/null
 # This file is for storing secrets and API keys.
 # It is sourced by your shell configuration if it exists.
 # Make sure this file is NOT committed to version control.
@@ -207,6 +335,9 @@ setup_env_secrets() {
 # export ESXI_HOST="192.168.1.100"
 # export ESXI_USER="root"
 # export ESXI_PASSWORD="your_esxi_password"
+# export OLLAMA_ALLOWED_ORIGINS="https://chat.yourdomain.com,http://localhost:8081"
+export SYSTEM_TIMEZONE="${GLOBAL_SYSTEM_TIMEZONE:-America/Los_Angeles}"
+export TZ="${GLOBAL_SYSTEM_TIMEZONE:-America/Los_Angeles}"
 EOF
         sudo chmod 600 "$TARGET_USER_HOME/.env.secrets"
     fi
@@ -253,6 +384,10 @@ EOF
             esac
         done
     fi
+
+    print_info "Securing API keys file permissions..."
+    sudo chown "$TARGET_USER":"$TARGET_USER" "$TARGET_USER_HOME/.env.secrets"
+    sudo chmod 600 "$TARGET_USER_HOME/.env.secrets"
 }
 
 # 1. Install Oh My Zsh & Dev Tools (git, tmux, micro)
@@ -392,6 +527,12 @@ install_docker() {
 
     print_info "Adding current user to the 'docker' group..."
     sudo usermod -aG docker "$TARGET_USER"
+    
+    if id -nG "$TARGET_USER" | grep -qw "docker"; then
+        print_success "User '$TARGET_USER' successfully added to the 'docker' group."
+    else
+        echo -e "⚠️ \e[1;33mFailed to add '$TARGET_USER' to the 'docker' group. You may need to add it manually.\e[0m"
+    fi
 
     print_success "Docker installed successfully."
     POST_INSTALL_ACTIONS+=("docker")
@@ -706,9 +847,13 @@ install_cuda_toolkit() {
     print_info "Installing CUDA..."
     # Make CUDA repo installation dynamic based on Ubuntu version
     UBUNTU_VERSION=$(lsb_release -sr | tr -d '.')
-    wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
-    sudo dpkg -i cuda-keyring_1.1-1_all.deb
-    rm cuda-keyring_1.1-1_all.deb
+    wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb" || echo "⚠️ Failed to fetch CUDA keyring."
+    if [ -f cuda-keyring_1.1-1_all.deb ]; then
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb || true
+        rm cuda-keyring_1.1-1_all.deb
+    else
+        echo "❌ Could not find cuda-keyring_1.1-1_all.deb. CUDA install may fail."
+    fi
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get -y install cuda-toolkit
 
@@ -934,12 +1079,12 @@ install_local_llm() {
             wait "$spinner_pid" 2>/dev/null || true
         fi
 
-        local llama_host_args="--port 8081"
+        local llama_host_args="--port 8080"
         if [[ "$install_llamacpp_cuda" == "y" ]]; then
             llama_host_args+=" -ngl 99"
         fi
-        if [[ "$EXPOSE_LLM_ENGINE" == "y" || "$EXPOSE_LLAMA_SERVER" == "y" ]]; then
-            llama_host_args+=" --host 0.0.0.0"
+        if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
+            llama_host_args+=" --host 0.0.0.0 --cors"
         fi
 
         if [[ "$INSTALL_LLAMA_SERVICE" == "y" ]]; then
@@ -959,7 +1104,7 @@ After=network.target
 User=$TARGET_USER
 Environment=\"HOME=$TARGET_USER_HOME\"
 $env_cuda
-ExecStart=/usr/local/bin/llama-server $hf_args $llama_host_args
+ExecStart=/bin/bash -c "source $TARGET_USER_HOME/.env.secrets 2>/dev/null; exec /usr/local/bin/llama-server $hf_args $llama_host_args"
 Restart=always
 RestartSec=3
 
@@ -968,7 +1113,7 @@ WantedBy=multi-user.target
 EOF"
                 sudo systemctl daemon-reload
                 sudo systemctl enable --now llama-server
-                print_success "llama.cpp service installed and started on port 8081."
+                print_success "llama.cpp service installed and started on port 8080."
         fi
     fi
 
@@ -979,7 +1124,12 @@ EOF"
         if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
             print_info "Configuring Ollama for external access..."
             sudo mkdir -p /etc/systemd/system/ollama.service.d
-            echo -e "[Service]\nEnvironment=\"OLLAMA_HOST=0.0.0.0:11434\"" | sudo tee /etc/systemd/system/ollama.service.d/override.conf > /dev/null
+            local allowed_origins="*"
+            if sudo test -f "$TARGET_USER_HOME/.env.secrets"; then
+                local env_origins=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$OLLAMA_ALLOWED_ORIGINS\"" | tr -d '\r')
+                if [[ -n "$env_origins" ]]; then allowed_origins="$env_origins"; fi
+            fi
+            echo -e "[Service]\nEnvironment=\"OLLAMA_HOST=0.0.0.0:11434\"\nEnvironment=\"OLLAMA_ORIGINS=$allowed_origins\"" | sudo tee /etc/systemd/system/ollama.service.d/override.conf > /dev/null
             sudo systemctl daemon-reload
             sudo systemctl restart ollama
             sudo ufw allow 11434/tcp &>/dev/null || true
@@ -991,25 +1141,32 @@ EOF"
         ollama list || echo "No models installed yet."
         echo ""
         if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
-            print_info "Downloading and running default model..."
+            while true; do
+                print_info "Downloading and running default model (this will show native download progress)..."
+                local ollama_status=0
 
-            (
-                local elapsed=0
-                while true; do
-                    sleep 10
-                    elapsed=$((elapsed + 10))
-                    echo -e "\r\e[1;36mℹ️ Still downloading model... ($elapsed seconds elapsed)\e[0m"
-                done
-            ) &
-            local spinner_pid=$!
+                if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "5" ]]; then ollama run tinydolphin "Once upon a time," < /dev/null || ollama_status=$?
+                elif [[ "$LLM_DEFAULT_MODEL_CHOICE" =~ ^[1-4]$ ]]; then ollama run "$SELECTED_MODEL_REPO" "Hello, system check." < /dev/null || ollama_status=$?
+                elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && -n "$OLLAMA_PULL_MODEL" ]]; then ollama pull "$OLLAMA_PULL_MODEL" < /dev/null || ollama_status=$?
+                fi
 
-            if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "5" ]]; then ollama run tinydolphin "Once upon a time," < /dev/null >/dev/null 2>&1 || true
-            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" =~ ^[1-4]$ ]]; then ollama run "hf.co/$SELECTED_MODEL_REPO" "Hello, system check." < /dev/null >/dev/null 2>&1 || true
-            elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && -n "$OLLAMA_PULL_MODEL" ]]; then ollama pull "$OLLAMA_PULL_MODEL" < /dev/null >/dev/null 2>&1 || true
-            fi
+                echo ""
 
-            kill "$spinner_pid" 2>/dev/null || true
-            wait "$spinner_pid" 2>/dev/null || true
+                if [[ $ollama_status -eq 0 ]]; then
+                    print_success "Model successfully downloaded and verified."
+                    break
+                else
+                    echo -e "\n❌ \e[1;31mFailed to download or load the Ollama model.\e[0m"
+                    read -p "Enter a valid Ollama model (e.g., 'llama3.2') or type 'skip': " fallback_repo
+                    if [[ "$fallback_repo" == "skip" || "$fallback_repo" == "Skip" ]]; then
+                        print_info "Skipping default model load."
+                        break
+                    elif [[ -n "$fallback_repo" ]]; then
+                        LLM_DEFAULT_MODEL_CHOICE="6"
+                        OLLAMA_PULL_MODEL="$fallback_repo"
+                    fi
+                fi
+            done
         fi
     fi
 
@@ -1037,14 +1194,14 @@ EOF"
             if [[ "$HAS_NVIDIA_GPU" == true ]]; then
                 docker_cmd+=(--gpus all)
             fi
-            docker_cmd+=(-e OLLAMA_BASE_URL=http://127.0.0.1:11434)
+            docker_cmd+=(-e OLLAMA_BASE_URL=http://127.0.0.1:11434 -e PORT=8081)
             if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
                 docker_cmd+=(-e HOST='0.0.0.0')
-                sudo ufw allow 8080/tcp &>/dev/null || true
+                sudo ufw allow 8081/tcp &>/dev/null || true
             fi
             if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
                 print_info "Configuring Open-WebUI to connect to llama.cpp backend..."
-                docker_cmd+=(-e OPENAI_API_BASE_URL=http://127.0.0.1:8081/v1 -e OPENAI_API_KEY=sk-llamacpp)
+                docker_cmd+=(-e OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1 -e OPENAI_API_KEY=sk-llamacpp)
             fi
             docker_cmd+=(-v open-webui:/app/backend/data --name open-webui ghcr.io/open-webui/open-webui:main)
             
@@ -1095,30 +1252,40 @@ EOF"
     if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
         echo ""
         print_info "Running llama.cpp performance test... (This may take a minute to download the test model)"
-        local test_cmd_prefix="export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
+        local secrets_source="[ -f \"$TARGET_USER_HOME/.env.secrets\" ] && source \"$TARGET_USER_HOME/.env.secrets\";"
+        local test_cmd_prefix="$secrets_source export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
         local tmp_out
         tmp_out=$(mktemp)
         
+        local ngl_test_args="-ngl 99"
+        if [[ "$install_llamacpp_cpu" == "y" ]]; then ngl_test_args="-ngl 0"; fi
+
+        sudo -u "$TARGET_USER" bash -c "$test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 $ngl_test_args" > "$tmp_out" 2>&1 &
+        local cli_pid=$!
+
         (
             local elapsed=0
             while true; do
-                sleep 10
-                elapsed=$((elapsed + 10))
+                if grep -qEi 'Generation:.*t/s|eval time.*tokens per second' "$tmp_out" 2>/dev/null; then
+                    break
+                fi
+                if ! kill -0 $cli_pid 2>/dev/null; then
+                    break
+                fi
+                sleep 5
+                elapsed=$((elapsed + 5))
                 echo -e "\r\e[1;36mℹ️ Still running inference test... ($elapsed seconds elapsed)\e[0m"
             done
+            sudo pkill -P $cli_pid 2>/dev/null || true
+            sudo kill $cli_pid 2>/dev/null || true
+            sudo pkill -f "llama-cli.*TinyStories" 2>/dev/null || true
         ) &
         local spinner_pid=$!
 
-        local ngl_test_args="-ngl 99"
-        if [[ "$install_llamacpp_cpu" == "y" ]]; then ngl_test_args="-ngl 0"; fi
-            sudo -u "$TARGET_USER" bash -c "$test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 $ngl_test_args < /dev/null" > "$tmp_out" 2>&1 || true
-            sudo -u "$TARGET_USER" bash -c "echo '/exit' | timeout 300 $test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 $ngl_test_args" > "$tmp_out" 2>&1 || true
-
-        kill "$spinner_pid" 2>/dev/null || true
         wait "$spinner_pid" 2>/dev/null || true
 
-        local prompt_speed=$(grep -i 'prompt eval time' "$tmp_out" | grep -Eo '[0-9.]+ tokens per second' | awk '{print $1}' | head -n 1)
-        local gen_speed=$(grep -i 'eval time' "$tmp_out" | grep -iv 'prompt' | grep -Eo '[0-9.]+ tokens per second' | awk '{print $1}' | head -n 1)
+        local prompt_speed=$(grep -Eo '[0-9.]+ tokens per second|Prompt: [0-9.]+ t/s' "$tmp_out" | grep -Eo '[0-9.]+' | head -n 1)
+        local gen_speed=$(grep -Eo '[0-9.]+ tokens per second|Generation: [0-9.]+ t/s' "$tmp_out" | grep -Eo '[0-9.]+' | tail -n 1)
 
         if [[ -n "$prompt_speed" && -n "$gen_speed" ]]; then
             print_success "llama.cpp test complete: [ Prompt: ${prompt_speed} t/s | Generation: ${gen_speed} t/s ]"
@@ -1132,16 +1299,22 @@ EOF"
         rm -f "$tmp_out"
 
         echo ""
+        if [[ "$INSTALL_LLAMA_SERVICE" == "y" ]]; then
+            print_info "⚠️  NOTE: llama.cpp is currently running as a background service!"
+            print_info "Before running manually, you MUST stop the service to free up your VRAM:"
+            echo -e "\e[1;33msudo systemctl stop llama-server\e[0m\n"
+        fi
+
         if [[ "$install_llamacpp_cuda" == "y" ]]; then
             print_info "To run the server manually, use a command like this:"
-            echo "llama-server $hf_args $llama_host_args"
+            echo "source ~/.env.secrets 2>/dev/null; llama-server $hf_args $llama_host_args"
             print_info "To chat interactively in the CLI, use:"
-            echo "llama-cli $hf_args -ngl 99 -cnv"
+            echo "source ~/.env.secrets 2>/dev/null; llama-cli $hf_args -ngl 99 -cnv"
         else
             print_info "To run the server manually, use a command like this:"
-            echo "llama-server $hf_args $llama_host_args"
+            echo "source ~/.env.secrets 2>/dev/null; llama-server $hf_args $llama_host_args"
             print_info "To chat interactively in the CLI, use:"
-            echo "llama-cli $hf_args -cnv"
+            echo "source ~/.env.secrets 2>/dev/null; llama-cli $hf_args -cnv"
         fi
     fi
 }
@@ -1224,6 +1397,22 @@ EOF
 
     print_info "Switching to '$TARGET_USER' to install and onboard OpenClaw."
     echo -e "\e[1;33mYou will be prompted for the password for user '$TARGET_USER'.\e[0m"
+    
+    echo -e "\n\e[1;35m=================================================================\e[0m"
+    echo -e "\e[1;36m🤖 OPENCLAW ONBOARDING INSTRUCTIONS\e[0m"
+    if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
+        echo -e "When asked for the Model/auth provider, select: \e[1;32mOpenAI\e[0m"
+        echo -e "When asked for the API Key, enter:              \e[1;32msk-llamacpp\e[0m"
+        echo -e "When asked for the Base URL, enter:             \e[1;32mhttp://127.0.0.1:8080/v1\e[0m"
+        echo -e "When asked for the Model Name, enter:           \e[1;32mllama\e[0m (or leave blank)"
+    elif [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
+        echo -e "When asked for the Model/auth provider, select: \e[1;32mOllama\e[0m"
+        echo -e "When asked for the Base URL, enter:             \e[1;32mhttp://127.0.0.1:11434\e[0m"
+    else
+        echo -e "Select your preferred cloud provider (e.g., OpenAI, Anthropic) and provide your API key."
+    fi
+    echo -e "\e[1;35m=================================================================\e[0m\n"
+
     while true; do
         # Temporarily disable exit-on-error for the su command
         set +e
@@ -1252,21 +1441,96 @@ EOF
         # Use jq to safely update the JSON config file
         local tmp_json_file
         tmp_json_file=$(mktemp)
-        sudo jq '.gateway.bind = "0.0.0.0" | .gateway.port = 18789 | .gateway.controlUi.enabled = true' "$openclaw_config" > "$tmp_json_file" && \
+        local bind_ip="127.0.0.1"
+        if [[ "$EXPOSE_OPENCLAW" == "y" ]]; then bind_ip="0.0.0.0"; fi
+        sudo jq ".gateway.bind = \"$bind_ip\" | .gateway.port = $OPENCLAW_PORT | .gateway.controlUi.enabled = true" "$openclaw_config" > "$tmp_json_file" && \
         sudo mv "$tmp_json_file" "$openclaw_config" && sudo chown "$TARGET_USER":"$TARGET_USER" "$openclaw_config"
-        print_success "OpenClaw gateway configured to bind to 0.0.0.0:18789."
+        print_success "OpenClaw gateway configured to bind to $bind_ip:$OPENCLAW_PORT."
     else
         echo "⚠️  OpenClaw config file not found at ${openclaw_config}. Skipping gateway configuration."
     fi
 
-    print_info "Configuring firewall rules for OpenClaw (UFW)..."
-    sudo ufw default deny incoming
-    sudo ufw allow 22/tcp # Ensure SSH access is not blocked
-    sudo ufw allow 18789/tcp # Allow OpenClaw gateway access
-    print_success "UFW rules configured."
+    if [[ "$EXPOSE_OPENCLAW" == "y" ]]; then
+        print_info "Configuring firewall rules for OpenClaw (UFW)..."
+        sudo ufw allow $OPENCLAW_PORT/tcp &>/dev/null || true
+        POST_INSTALL_ACTIONS+=("ufw")
+        print_success "UFW rule for OpenClaw ($OPENCLAW_PORT) configured."
+    fi
+
+    if [ -f "$openclaw_config" ]; then
+        local sec_options=(
+            "Disable mDNS (LAN discovery broadcasts)"
+            "Enable Docker Sandboxing (Highly Recommended)"
+            "Restrict High-Risk Tools (Require manual approval for exec, shell, filesystem_delete)"
+            "Set DM Policy to 'locked' (Private access only)"
+            "Lock Configuration Permissions (chmod 700/600)"
+            "Run Deep Security Audit now"
+        )
+        local sec_selections=(1 1 1 1 1 1)
+
+        while true; do
+            clear
+            print_status_header
+            echo -e "\n\e[1;36mSecure OpenClaw Configuration:\e[0m"
+            for i in "${!sec_options[@]}"; do
+                if [[ ${sec_selections[$i]} -eq 1 ]]; then
+                    echo -e " \e[1;32m[x]\e[0m $((i+1)). ${sec_options[$i]}"
+                else
+                    echo -e " [ ] $((i+1)). ${sec_options[$i]}"
+                fi
+            done
+            echo "---------------------------------"
+            echo "Use numbers [1-${#sec_options[@]}] to toggle. Press 'a' to select all, 'c' to confirm."
+            read -p "Your choice: " sec_choice
+            if [[ "$sec_choice" =~ ^[0-9]+$ ]] && [ "$sec_choice" -ge 1 ] && [ "$sec_choice" -le ${#sec_options[@]} ]; then
+                local idx=$((sec_choice - 1))
+                sec_selections[$idx]=$((1 - sec_selections[$idx]))
+            elif [[ "$sec_choice" == "a" || "$sec_choice" == "A" ]]; then
+                for ((i=0; i<${#sec_options[@]}; i++)); do sec_selections[$i]=1; done
+            elif [[ "$sec_choice" == "c" || "$sec_choice" == "C" ]]; then
+                break
+            else
+                echo -e "\nInvalid option." && sleep 1
+            fi
+        done
+
+        local tmp_json_file2
+        tmp_json_file2=$(mktemp)
+        local jq_filters="."
+        
+        if [[ ${sec_selections[0]} -eq 1 ]]; then jq_filters="$jq_filters | .discovery.mdns.mode = \"off\""; fi
+        if [[ ${sec_selections[1]} -eq 1 ]]; then jq_filters="$jq_filters | .agents.defaults.sandbox.mode = \"all\""; fi
+        if [[ ${sec_selections[2]} -eq 1 ]]; then jq_filters="$jq_filters | .agents.defaults.tools.exec.requireApproval = true | .agents.defaults.tools.shell.requireApproval = true | .agents.defaults.tools.filesystem_delete.requireApproval = true"; fi
+        if [[ ${sec_selections[3]} -eq 1 ]]; then jq_filters="$jq_filters | .channels.defaults.dmPolicy = \"locked\""; fi
+        
+        if [ "$jq_filters" != "." ]; then
+            print_info "Applying OpenClaw security configuration..."
+            sudo jq "$jq_filters" "$openclaw_config" > "$tmp_json_file2" && \
+            sudo mv "$tmp_json_file2" "$openclaw_config" && sudo chown "$TARGET_USER":"$TARGET_USER" "$openclaw_config"
+            
+            print_info "Restarting OpenClaw daemon to apply security settings..."
+            sudo -u "$TARGET_USER" bash -c "export XDG_RUNTIME_DIR=\"/run/user/\$(id -u)\"; export DBUS_SESSION_BUS_ADDRESS=\"unix:path=\${XDG_RUNTIME_DIR}/bus\"; systemctl --user restart openclaw.service 2>/dev/null || true"
+            print_success "OpenClaw security settings applied."
+        fi
+        
+        if [[ ${sec_selections[4]} -eq 1 ]]; then
+            print_info "Locking OpenClaw configuration permissions..."
+            sudo chmod 700 "$TARGET_USER_HOME/.openclaw"
+            sudo chmod 600 "$openclaw_config"
+            print_success "Permissions locked (700 for .openclaw, 600 for openclaw.json)."
+        fi
+
+        if [[ ${sec_selections[5]} -eq 1 ]]; then
+            print_info "Running OpenClaw Deep Security Audit..."
+            sudo -u "$TARGET_USER" bash -c "export PATH=\"$TARGET_USER_HOME/.local/bin:\$PATH\"; openclaw security audit --deep" || echo -e "⚠️ \e[1;33mAudit returned warnings/errors, please review.\e[0m"
+            echo ""
+            read -n 1 -s -r -p "Press any key to continue..."
+            echo ""
+        fi
+    fi
 
     print_success "OpenClaw installation complete."
-    POST_INSTALL_ACTIONS+=("openclaw" "ufw")
+    POST_INSTALL_ACTIONS+=("openclaw")
 }
 
 # --- Installation Checks ---
@@ -1381,7 +1645,7 @@ verify_installations() {
         print_info "Waiting for llama.cpp server to initialize and load the model (timeout 60s)..."
         local api_up=0
         for i in {1..30}; do
-            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/health)" == "200" ]]; then
+            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/health)" == "200" ]]; then
                 api_up=1
                 break
             fi
@@ -1393,7 +1657,7 @@ verify_installations() {
             
             print_info "Testing llama.cpp /v1/chat/completions endpoint..."
             local response
-            response=$(curl -s -X POST http://127.0.0.1:8081/v1/chat/completions \
+            response=$(curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
                 -H "Content-Type: application/json" \
                 -d '{
                     "messages": [{"role": "user", "content": "Hello! Say hi."}],
@@ -1427,14 +1691,14 @@ verify_installations() {
         local webui_up=0
         for i in {1..30}; do
             # Check both the /health API endpoint and the root frontend route
-            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/health)" == "200" ]] || [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/)" == "200" ]]; then
+            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/health)" == "200" ]] || [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/)" == "200" ]]; then
                 webui_up=1
                 break
             fi
             sleep 2
         done
         if [[ $webui_up -eq 1 ]]; then
-            print_success "Open-WebUI frontend is reachable and ready on port 8080."
+            print_success "Open-WebUI frontend is reachable and ready on port 8081."
         else
             echo "⚠️ Open-WebUI did not return HTTP 200 in time. It might still be starting."
         fi
@@ -1443,20 +1707,22 @@ verify_installations() {
     # Verify OpenClaw
     if [ -f "$TARGET_USER_HOME/.local/bin/openclaw" ]; then
         services_checked=1
+        local oc_port="18789"
+        if [ -f "$TARGET_USER_HOME/.openclaw/openclaw.json" ]; then oc_port=$(sudo jq -r '.gateway.port // 18789' "$TARGET_USER_HOME/.openclaw/openclaw.json" 2>/dev/null); fi
         print_info "Waiting for OpenClaw Gateway to initialize (timeout 60s)..."
         local oc_up=0
         for i in {1..30}; do
             # A response other than 000 means the server is bound and successfully accepting HTTP requests
-            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18789/)" != "000" ]]; then
+            if [[ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$oc_port/)" != "000" ]]; then
                 oc_up=1
                 break
             fi
             sleep 2
         done
         if [[ $oc_up -eq 1 ]]; then
-            print_success "OpenClaw Gateway is reachable and ready on port 18789."
+            print_success "OpenClaw Gateway is reachable and ready on port $oc_port."
         else
-            echo "⚠️ OpenClaw Gateway is not responding on port 18789. It might still be starting."
+            echo "⚠️ OpenClaw Gateway is not responding on port $oc_port. It might still be starting."
         fi
     fi
 
@@ -1532,10 +1798,7 @@ print_final_summary() {
 
     if command -v gemini &> /dev/null; then
         print_info "Google Gemini CLI:"
-        local gemini_version
-        gemini_version=$(gemini --version < /dev/null 2>&1 | head -n 1)
-        gemini_version=$(timeout 5 gemini --version < /dev/null 2>&1 | head -n 1)
-        echo "Installed Version: ${gemini_version:-Unknown}"
+        echo "Installed at $(which gemini)"
         echo ""
     fi
 
@@ -1591,6 +1854,22 @@ print_final_summary() {
     if command -v llama-server &> /dev/null; then
         print_info "llama.cpp:"
         echo "llama-server installed at $(which llama-server)"
+        if systemctl is-active --quiet llama-server 2>/dev/null; then
+            echo -e "  \e[1;36m-> To test your live API server from the terminal, run:\e[0m"
+            cat <<'EOF'
+     curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
+       -H "Content-Type: application/json" \
+       -H "Authorization: Bearer sk-llamacpp" \
+       -d '{
+         "messages": [
+           {"role": "system", "content": "You are a helpful coding assistant."},
+           {"role": "user", "content": "Write a quick haiku about the Linux command line."}
+         ],
+         "temperature": 0.7,
+         "max_tokens": 150
+       }' | jq -r '.choices[0].message.content'
+EOF
+        fi
         echo ""
     fi
 
@@ -1601,9 +1880,9 @@ print_final_summary() {
         echo "Status: $webui_status"
         if command -v llama-server &> /dev/null; then
             echo -e "  \e[1;36m-> How to connect Open-WebUI to llama.cpp:\e[0m"
-            echo "     1. Open WebUI in your browser (e.g., http://localhost:8080)"
+            echo "     1. Open WebUI in your browser (e.g., http://localhost:8081)"
             echo "     2. Go to Profile (bottom left) -> Settings -> Connections"
-            echo "     3. Under 'OpenAI API', verify the URL is 'http://127.0.0.1:8081/v1' and Key is 'sk-llamacpp'"
+            echo "     3. Under 'OpenAI API', verify the URL is 'http://127.0.0.1:8080/v1' and Key is 'sk-llamacpp'"
             echo "     4. Click the 'Verify Connection' icon. Your model should automatically load!"
         fi
         echo ""
@@ -1693,7 +1972,9 @@ show_menu() {
         if [[ $master_index -eq 14 || $master_index -eq 15 ]]; then menu_body+="\n"; fi
 
         local line=""
-        if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 1 ]]; then
+        if [[ $master_index -eq 0 ]]; then
+            line=" \e[1;32m[x]\e[0m ${ui_num}. ${MASTER_OPTIONS[$master_index]} (Required)"
+        elif [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 1 ]]; then
             line=" \e[1;36m[✓]\e[0m ${ui_num}. ${MASTER_OPTIONS[$master_index]}"
         elif [[ ${MASTER_SELECTIONS[$master_index]} -eq 1 ]]; then
             line=" \e[1;32m[x]\e[0m ${ui_num}. ${MASTER_OPTIONS[$master_index]}"
@@ -1707,13 +1988,11 @@ show_menu() {
     done
 
     clear
-    echo -e "\n\e[1;35m--- Ubuntu Prep Script Menu ---\e[0m"
-    echo -e "Hardware: $GPU_STATUS"
-    echo -e "Target User: \e[1;36m$TARGET_USER\e[0m ($TARGET_USER_HOME)"
+    print_status_header
     echo "Use numbers [1-$((ui_num-1))] to toggle an option. Press 'a' to select all."
     echo "Press 'i' to install selected, or 'q' to quit."
     echo "---------------------------------"
-    echo -e -n "$menu_body"
+    printf "%b" "$menu_body"
     echo "---------------------------------"
 }
 
@@ -1723,6 +2002,10 @@ main() {
     check_os
     determine_target_user
     detect_gpu
+    
+    clear
+    print_status_header
+    configure_timezone
 
     local MASTER_OPTIONS=(
         "Update System Packages (apt update && upgrade)"
@@ -1762,9 +2045,9 @@ main() {
         install_openclaw
     )
 
-    local MASTER_SELECTIONS=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+    local MASTER_SELECTIONS=(1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
     local MASTER_INSTALLED_STATE=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
-    local ACTIVE_INDICES=()
+    local ACTIVE_INDICES=(0)
     local UI_TO_MASTER=()
 
     ensure_active_index() {
@@ -1785,6 +2068,7 @@ main() {
 
     while true; do
         clear
+        print_status_header
         echo -e "\n\e[1;36mSelect Installation Goals:\e[0m"
         for i in "${!GOAL_OPTIONS[@]}"; do
             if [[ ${GOAL_SELECTIONS[$i]} -eq 1 ]]; then
@@ -1816,7 +2100,7 @@ main() {
         fi
     done
 
-    if [[ ${GOAL_SELECTIONS[0]} -eq 1 ]]; then ACTIVE_INDICES+=(0 1 2 3 4 5 6 15); fi
+    if [[ ${GOAL_SELECTIONS[0]} -eq 1 ]]; then ACTIVE_INDICES+=(1 2 3 4 5 6 15); fi
     if [[ ${GOAL_SELECTIONS[1]} -eq 1 ]]; then ACTIVE_INDICES+=(7 8 9 10 11 12 13); fi
     if [[ ${GOAL_SELECTIONS[2]} -eq 1 ]]; then ACTIVE_INDICES+=(14); fi
 
@@ -1832,6 +2116,11 @@ main() {
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#UI_TO_MASTER[@]} ]; then
             local master_index=${UI_TO_MASTER[$choice]}
             
+            if [[ $master_index -eq 0 ]]; then
+                echo -e "\nSystem Update is required and cannot be deselected." && sleep 1.5
+                continue
+            fi
+
             if [[ ${MASTER_INSTALLED_STATE[$master_index]} -eq 1 ]]; then
                 if [[ $master_index -eq 14 ]]; then
                     echo -e "\nLocal LLM Stack is already installed."
@@ -1854,6 +2143,7 @@ main() {
                     local cancel_llm=false
                     while true; do
                         clear
+                        print_status_header
                         echo -e "\n\e[1;36mSelect Local LLM Backend (Exclusive):\e[0m"
                         if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then echo -e "  \e[1;32m(*)\e[0m 1. Ollama"; else echo "  ( ) 1. Ollama"; fi
                         if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" ]]; then echo -e "  \e[1;32m(*)\e[0m 2. llama.cpp with CPU"; else echo "  ( ) 2. llama.cpp with CPU"; fi
@@ -1878,49 +2168,27 @@ main() {
                 INSTALL_OPENWEBUI="n"
                 EXPOSE_LLM_ENGINE="n"
                 LOAD_DEFAULT_MODEL="n"
-                INSTALL_WATCHTOWER="n"
-                AUTO_UPDATE_MODEL="n"
                 LLM_DEFAULT_MODEL_CHOICE=""
                 INSTALL_LLAMA_SERVICE="n"
                 ENABLE_UFW_AUTOMATICALLY="n"
-                PURGE_OLLAMA_MODELS="n"
-                PURGE_HF_MODELS="n"
                 
                 local opt_options=(
                     "Install open Web UI?"
-                    "Expose ${LLM_BACKEND_CHOICE} on 0.0.0.0?"
+                    "Allow external connections to ${LLM_BACKEND_CHOICE} (bind 0.0.0.0)?"
                     "Load default model?"
-                    "Auto-update selected model daily at 4 AM?"
-                    "Auto-update Open-WebUI via Watchtower (Daily at 4 AM)?"
                 )
 
                 if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
                     opt_options+=("Install llama.cpp model as system service?")
-                    opt_options+=("Open llama server to network?")
                 fi
                 opt_options+=("Enable UFW firewall (automatically opens SSH and selected ports)?")
-
-                local has_ollama_models=false
-                local has_hf_models=false
-                
-                if command -v ollama &> /dev/null && ollama list 2>/dev/null | tail -n +2 | grep -q .; then
-                    has_ollama_models=true
-                fi
-                if ls -1qA "$TARGET_USER_HOME/.cache/huggingface/hub" 2>/dev/null | grep -q "^models--"; then
-                    has_hf_models=true
-                fi
-
-                if [[ ("$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda") && "$has_ollama_models" == true ]]; then
-                    opt_options+=("Purge existing Ollama models to free up disk space?")
-                elif [[ "$LLM_BACKEND_CHOICE" == "ollama" && "$has_hf_models" == true ]]; then
-                    opt_options+=("Purge existing llama.cpp/HuggingFace models to free up space?")
-                fi
 
                 local opt_selections=()
                 for ((i=0; i<${#opt_options[@]}; i++)); do opt_selections+=(0); done
 
                 while true; do
                     clear
+                    print_status_header
                     echo -e "\n\e[1;36mConfigure Additional Options:\e[0m"
                     for i in "${!opt_options[@]}"; do
                         if [[ ${opt_selections[$i]} -eq 1 ]]; then
@@ -1948,23 +2216,24 @@ main() {
                     if [[ ${opt_selections[$i]} -eq 1 ]]; then
                         case "${opt_options[$i]}" in
                             "Install open Web UI?") INSTALL_OPENWEBUI="y" ;;
-                            "Expose "*on*0.0.0.0?) EXPOSE_LLM_ENGINE="y" ;;
+                    "Install LibreChat?") INSTALL_LIBRECHAT="y" ;;
+                            "Allow external connections to "*0.0.0.0?) EXPOSE_LLM_ENGINE="y" ;;
                             "Load default model?") LOAD_DEFAULT_MODEL="y" ;;
-                            "Auto-update selected model daily at 4 AM?") AUTO_UPDATE_MODEL="y" ;;
-                            "Auto-update Open-WebUI via Watchtower (Daily at 4 AM)?") INSTALL_WATCHTOWER="y" ;;
                             "Install llama.cpp model as system service?") INSTALL_LLAMA_SERVICE="y" ;;
-                            "Open llama server to network?") EXPOSE_LLAMA_SERVER="y" ;;
                             "Enable UFW firewall (automatically opens SSH and selected ports)?") ENABLE_UFW_AUTOMATICALLY="y" ;;
-                            "Purge existing Ollama models to free up disk space?") PURGE_OLLAMA_MODELS="y" ;;
-                            "Purge existing llama.cpp/HuggingFace models to free up space?") PURGE_HF_MODELS="y" ;;
                         esac
                     fi
                 done
 
-                if [[ "$INSTALL_WATCHTOWER" == "y" && "$INSTALL_OPENWEBUI" == "n" ]]; then
-                    INSTALL_OPENWEBUI="y"
-                    echo -e "\n[Auto-selected] Open-WebUI was selected because Watchtower auto-update requires it." && sleep 2
-                fi
+        if [[ "$INSTALL_LIBRECHAT" == "y" ]]; then
+            echo ""
+            read -p "Do you want to run LibreChat on port 8083 instead of the default 3080? [y/N]: " lc_port_choice
+            if [[ "$lc_port_choice" == "y" || "$lc_port_choice" == "Y" ]]; then
+                LIBRECHAT_PORT="8083"
+            else
+                LIBRECHAT_PORT="3080"
+            fi
+        fi
 
                 if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
                     local detected_ram_vram=0
@@ -1972,141 +2241,232 @@ main() {
                     
                     if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" ]]; then
                         memory_type="System RAM"
-                        local ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-                        if [[ -n "$ram_kb" ]]; then
-                            detected_ram_vram=$((ram_kb / 1024 / 1024))
-                        fi
+                        detected_ram_vram=${SYSTEM_RAM_GB:-0}
                     else
-                        if command -v nvidia-smi &> /dev/null; then
-                            local vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | awk '{sum += $1} END {print sum}')
-                            if [[ -n "$vram_mb" ]]; then
-                                detected_ram_vram=$((vram_mb / 1024))
+                        detected_ram_vram=${GPU_VRAM_GB:-0}
+                    fi
+                    
+                    while true; do
+                        local vram_tier="8"
+                        echo -e "\n\e[1;36mSelect a model to load or choose your ${memory_type} tier for recommendations:\e[0m"
+                        if [[ $detected_ram_vram -gt 0 ]]; then
+                            echo -e "Detected total ${memory_type}: \e[1;32m~${detected_ram_vram} GB\e[0m"
+                        fi
+                        echo "  1. Tiny Model (for quick testing)"
+                        echo "  2. Specify a different model to download"
+                        echo ""
+                        echo "  3. 8 GB"
+                        echo "  4. 16 GB"
+                        echo "  5. 24 GB"
+                        echo "  6. 32 GB"
+                        echo "  7. 48 GB"
+                        echo "  8. 72 GB"
+                        echo "  9. 96 GB"
+                        read -p "Your choice [1-9]: " vram_choice
+                        
+                        if [[ "$vram_choice" == "1" ]]; then
+                            LLM_DEFAULT_MODEL_CHOICE="5"
+                            break
+                        elif [[ "$vram_choice" == "2" ]]; then
+                            LLM_DEFAULT_MODEL_CHOICE="6"
+                            if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
+                                while true; do
+                                    read -p "Enter an Ollama model name to pull (e.g., 'llama3', 'mistral'): " raw_input
+                                    if [[ -z "$raw_input" ]]; then
+                                        echo "Input cannot be empty."
+                                        continue
+                                    fi
+                                    
+                                    local base_model=$(echo "$raw_input" | cut -d':' -f1)
+                                    if command -v curl &> /dev/null; then
+                                        if [[ "$base_model" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+                                            echo -e "🔍 Checking Ollama library for '\e[1;36m$base_model\e[0m'..."
+                                            local status_code=$(curl -s -o /dev/null -w "%{http_code}" "https://ollama.com/library/$base_model")
+                                            if [[ "$status_code" == "200" ]]; then echo -e "✅ \e[1;32mModel found.\e[0m"
+                                            elif [[ "$status_code" == "404" ]]; then echo -e "❌ \e[1;31mModel not found in official library (HTTP 404).\e[0m Please check for typos."; continue;
+                                            else echo -e "⚠️ \e[1;33mUnexpected HTTP status: $status_code\e[0m. Proceeding anyway."; fi
+                                        else
+                                            echo -e "⚠️ \e[1;33mCustom or external repository format detected.\e[0m Proceeding without verification."
+                                        fi
+                                    fi
+                                    OLLAMA_PULL_MODEL="$raw_input"
+                                    echo ""
+                                    read -n 1 -s -r -t 5 -p "Press any key to continue (or wait 5s)..."
+                                    echo ""
+                                    break
+                                done
+                            elif [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
+                                echo -e "\n\e[1;36mThe llama-cli and llama-server tools can automatically download GGUF models from Hugging Face if you provide the repository name."
+                                echo -e "Format: username/repository (e.g., 'Qwen/Qwen2.5-7B-Instruct-GGUF')"
+                                echo -e "Or:     username/repository:filename (e.g., 'Qwen/Qwen2.5-7B-Instruct-GGUF:qwen2.5-7b-instruct-q4_k_m.gguf')\e[0m\n"
+                                while true; do
+                                    read -p "Enter HuggingFace string: " raw_input
+                                    if [[ -z "$raw_input" ]]; then
+                                        echo "Input cannot be empty."
+                                        continue
+                                    fi
+                                    
+                                    local hf_repo="${raw_input%:*}"
+                                    
+                                    if [[ ! "$hf_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                                        echo -e "❌ \e[1;31mInvalid syntax.\e[0m Must be 'username/repository' (e.g., Qwen/Qwen2.5-7B-Instruct-GGUF)."
+                                        continue
+                                    fi
+
+                                    if command -v curl &> /dev/null; then
+                                        echo -e "🔍 Checking Hugging Face repository '\e[1;36m$hf_repo\e[0m'..."
+                                        local status_code
+                                        local hf_token_header="no"
+                                        local curl_cmd=(curl -s -o /dev/null -w "%{http_code}")
+                                        
+                                        if sudo test -f "$TARGET_USER_HOME/.env.secrets"; then
+                                            local detected_token=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$HF_TOKEN\"" | tr -d '\r')
+                                            if [[ -n "$detected_token" ]]; then 
+                                                curl_cmd+=(-H "Authorization: Bearer $detected_token")
+                                                hf_token_header="yes"
+                                            fi
+                                        fi
+
+                                        curl_cmd+=("https://huggingface.co/api/models/$hf_repo")
+                                        status_code=$("${curl_cmd[@]}")
+
+                                        if [[ "$status_code" == "200" ]]; then 
+                                            echo -e "✅ \e[1;32mRepository found and accessible.\e[0m"
+                                            
+                                            local custom_file="${raw_input#*:}"
+                                            if [[ "$hf_repo" == "$custom_file" || -z "$custom_file" ]]; then
+                                                echo -e "🔍 Auto-detecting optimal GGUF file..."
+                                                local tree_cmd=(curl -s)
+                                                if [[ "$hf_token_header" == "yes" ]]; then tree_cmd+=(-H "Authorization: Bearer $detected_token"); fi
+                                                tree_cmd+=("https://huggingface.co/api/models/$hf_repo/tree/main")
+                                                
+                                                local files_json=$("${tree_cmd[@]}")
+                                                local gguf_files=$(echo "$files_json" | grep -io '"path":"[^"]*\.gguf"' | cut -d'"' -f4 || true)
+                                                
+                                                if [[ -n "$gguf_files" ]]; then
+                                                    local best_file=""
+                                                    if echo "$gguf_files" | grep -qi 'Q4_K_M'; then best_file=$(echo "$gguf_files" | grep -i 'Q4_K_M' | head -n 1)
+                                                    elif echo "$gguf_files" | grep -qi 'Q5_K_M'; then best_file=$(echo "$gguf_files" | grep -i 'Q5_K_M' | head -n 1)
+                                                    elif echo "$gguf_files" | grep -qi 'Q4_0'; then best_file=$(echo "$gguf_files" | grep -i 'Q4_0' | head -n 1)
+                                                    elif echo "$gguf_files" | grep -qi 'Q8_0'; then best_file=$(echo "$gguf_files" | grep -i 'Q8_0' | head -n 1)
+                                                    else best_file=$(echo "$gguf_files" | head -n 1); fi
+                                                    
+                                                    if [[ -n "$best_file" ]]; then echo -e "✅ \e[1;32mAuto-selected file: $best_file\e[0m"; raw_input="${hf_repo}:${best_file}"; fi
+                                                else echo -e "⚠️ \e[1;33mNo .gguf files detected in the root of this repository. You may need to specify the filename manually.\e[0m"; fi
+                                            fi
+                                        elif [[ "$status_code" == "401" ]]; then
+                                            echo -e "🔒 \e[1;33mRepository is GATED.\e[0m"
+                                            if [[ "$hf_token_header" == "no" ]]; then echo -e "❌ \e[1;31mNo HF_TOKEN found in ~/.env.secrets. You MUST add your Hugging Face token to download this model.\e[0m"; continue;
+                                            else echo -e "✅ \e[1;32mHF_TOKEN detected. Ensure your token has access to this repository.\e[0m"; fi
+                                        elif [[ "$status_code" == "404" ]]; then echo -e "❌ \e[1;31mRepository not found (HTTP 404).\e[0m Please check for typos."; continue;
+                                        else echo -e "⚠️ \e[1;33mUnexpected HTTP status: $status_code\e[0m. Proceeding anyway, but download might fail."; fi
+                                    fi
+                                    LLAMACPP_MODEL_REPO="$raw_input"
+                                    echo ""
+                                    read -n 1 -s -r -t 5 -p "Press any key to continue (or wait 5s)..."
+                                    echo ""
+                                    break
+                                done
+                            fi
+                            break
+                        fi
+
+                        case "$vram_choice" in
+                            3) vram_tier=8 ;;
+                            4) vram_tier=16 ;;
+                            5) vram_tier=24 ;;
+                            6) vram_tier=32 ;;
+                            7) vram_tier=48 ;;
+                            8) vram_tier=72 ;;
+                            9) vram_tier=96 ;;
+                            *) echo -e "\nInvalid choice. Please try again." && sleep 1; continue ;;
+                        esac
+
+                        if [[ "$detected_ram_vram" -gt 0 ]] && [[ "$vram_tier" -gt "$detected_ram_vram" ]]; then
+                            echo -e "\n\e[1;33m⚠️ WARNING: Memory Limit Exceeded\e[0m"
+                            echo -e "You selected the \e[1;36m${vram_tier}GB\e[0m tier, but only \e[1;31m~${detected_ram_vram}GB\e[0m of ${memory_type} was detected."
+                            echo -e "Models from this tier will likely cause severe slowdowns (swapping/CPU offloading) or Out of Memory (OOM) crashes."
+                            read -p "Are you sure you want to proceed? [y/N]: " override_mem
+                            if [[ "$override_mem" != "y" && "$override_mem" != "Y" ]]; then
+                                continue
                             fi
                         fi
-                    fi
-                    
-                    local vram_tier="8"
-                    echo -e "\n\e[1;36mSelect your ${memory_type} tier for model recommendations:\e[0m"
-                    if [[ $detected_ram_vram -gt 0 ]]; then
-                        echo -e "Detected total ${memory_type}: \e[1;32m~${detected_ram_vram} GB\e[0m"
-                    fi
-                    echo "  1. 8 GB"
-                    echo "  2. 16 GB"
-                    echo "  3. 24 GB"
-                    echo "  4. 32 GB"
-                    echo "  5. 48 GB"
-                    echo "  6. 72 GB"
-                    echo "  7. 96 GB"
-                    read -p "Your choice [1-7]: " vram_choice
-                    case "$vram_choice" in
-                        1) vram_tier=8 ;;
-                        2) vram_tier=16 ;;
-                        3) vram_tier=24 ;;
-                        4) vram_tier=32 ;;
-                        5) vram_tier=48 ;;
-                        6) vram_tier=72 ;;
-                        7) vram_tier=96 ;;
-                        *) vram_tier=8 ;;
-                    esac
-                    
-                    local m_chat="" m_code="" m_moe="" m_vision=""
-                    if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
-                        case "$vram_tier" in
-                            8)  m_chat="llama3.1:8b"
-                                m_code="qwen2.5-coder:7b"
-                                m_moe="gemma2:9b"
-                                m_vision="llava:7b" ;;
-                            16) m_chat="gpt-oss:20b"
-                                m_code="qwen3:14b"
-                                m_moe="ministral-3:14b"
-                                m_vision="llava:13b" ;;
-                            24) m_chat="qwen3:30b"
-                                m_code="glm-4.7-flash"
-                                m_moe="gemma4:26b"
-                                m_vision="llava:34b" ;;
-                            32) m_chat="gemma4:31b"
-                                m_code="glm-4.7-flash"
-                                m_moe="gemma4:26b"
-                                m_vision="qwen3-vl:32b" ;;
-                            48) m_chat="llama3.1:70b"
-                                m_code="qwen2.5:72b"
-                                m_moe="nemotron-cascade-2"
-                                m_vision="qwen3-vl:32b" ;;
-                            72) m_chat="qwen3-next:80b"
-                                m_code="qwen2.5:72b"
-                                m_moe="command-r-plus"
-                                m_vision="qwen3-vl:32b" ;;
-                            96) m_chat="gpt-oss:120b"
-                                m_code="qwen3:235b-q2"
-                                m_moe="nemotron-3-super"
-                                m_vision="qwen3-vl:32b" ;;
-                        esac
-                    else
-                        case "$vram_tier" in
-                            8)  m_chat="unsloth/Qwen3.5-9B-it-GGUF"
-                                m_code="unsloth/Qwen3.5-Coder-9B-GGUF"
-                                m_moe="unsloth/Qwen3.5-MoE-4B-GGUF"
-                                m_vision="unsloth/gemma-4-E4B-it-GGUF" ;;
-                            16) m_chat="unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF"
-                                m_code="unsloth/Qwen3.5-Coder-14B-GGUF"
-                                m_moe="unsloth/Llama-4-Maverick-17B-128E-Instruct-GGUF"
-                                m_vision="unsloth/gemma-4-E4B-it-GGUF" ;;
-                            24) m_chat="unsloth/Mistral-Small-3.2-24B-Instruct-v1-GGUF"
-                                m_code="unsloth/Qwen3.5-Coder-27B-GGUF"
-                                m_moe="unsloth/Qwen3.5-35B-A3B-GGUF"
-                                m_vision="unsloth/Qwen3.5-VL-27B-GGUF" ;;
-                            32) m_chat="unsloth/gemma-4-31B-it-GGUF"
-                                m_code="unsloth/Qwen3.5-Coder-35B-GGUF"
-                                m_moe="unsloth/gemma-4-26B-A4B-it-GGUF"
-                                m_vision="unsloth/gemma-4-31B-it-GGUF" ;;
-                            48) m_chat="unsloth/Llama-4-70B-Instruct-GGUF"
-                                m_code="unsloth/Qwen3.5-Coder-70B-GGUF"
-                                m_moe="unsloth/DeepSeek-V3.1-Distill-Qwen-70B-GGUF"
-                                m_vision="unsloth/Qwen3.5-VL-72B-GGUF" ;;
-                            72) m_chat="unsloth/DeepSeek-V3.2-Exp-120B-GGUF"
-                                m_code="unsloth/Qwen3.5-Coder-70B-GGUF"
-                                m_moe="unsloth/Qwen3.5-122B-A10B-GGUF"
-                                m_vision="unsloth/InternVL3-78B-GGUF" ;;
-                            96) m_chat="unsloth/DeepSeek-V3.2-Exp-120B-GGUF"
-                                m_code="unsloth/Qwen3.5-Coder-120B-GGUF"
-                                m_moe="unsloth/Qwen3.5-122B-A10B-GGUF"
-                                m_vision="unsloth/Llama-3.2-90B-Vision-Instruct-GGUF" ;;
-                        esac
-                    fi
-                    
-                    echo -e "\n\e[1;36mSelect a default model to load (${vram_tier}GB Tier):\e[0m"
-                    echo "  1. General Chat:    $m_chat"
-                    echo "  2. Coding:          $m_code"
-                    echo "  3. MoE:             $m_moe"
-                    echo "  4. Vision-Language: $m_vision"
-                    echo "  5. Tiny Model (for quick testing)"
-                    echo "  6. Specify a different model to download"
-                    read -p "Your choice [1-6]: " LLM_DEFAULT_MODEL_CHOICE
-                    
-                    if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "1" ]]; then SELECTED_MODEL_REPO="$m_chat";
-                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "2" ]]; then SELECTED_MODEL_REPO="$m_code";
-                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "3" ]]; then SELECTED_MODEL_REPO="$m_moe";
-                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "4" ]]; then SELECTED_MODEL_REPO="$m_vision";
-                    fi
-                    
-                    if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
-                        read -p "Enter an Ollama model name to pull (e.g., 'llama3', 'mistral'): " OLLAMA_PULL_MODEL
-                    elif [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && ("$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda") ]]; then
-                        echo -e "\n\e[1;36mThe llama-cli and llama-server tools can automatically download GGUF models from Hugging Face if you provide the repository name like this:"
-                        echo -e "  username/repository:quantization"
-                        echo -e "then load like this:"
-                        echo -e "  ./llama-cli --hf-repo username/repository:quantization -p \"Your prompt here\"\e[0m\n"
-                        read -p "Enter HuggingFace string (e.g., 'raincandy-u/TinyStories-656K-Q8_0-GGUF:Q8_0'): " LLAMACPP_MODEL_REPO
-                    fi
+                        
+                        get_model_recommendations "$LLM_BACKEND_CHOICE" "$vram_tier"
+                        local m_chat="$REC_MODEL_CHAT"
+                        local m_code="$REC_MODEL_CODE"
+                        local m_moe="$REC_MODEL_MOE"
+                        local m_vision="$REC_MODEL_VISION"
+                        
+                        echo -e "\n\e[1;36mSelect a default model to load (${vram_tier}GB Tier):\e[0m"
+                        echo "  1. General Chat:    $m_chat"
+                        echo "  2. Coding:          $m_code"
+                        echo "  3. MoE:             $m_moe"
+                        echo "  4. Vision-Language: $m_vision"
+                        echo "  b. Back to VRAM tier selection"
+                        read -p "Your choice [1-4, b]: " sub_choice
+                        
+                        if [[ "$sub_choice" == "b" || "$sub_choice" == "B" ]]; then
+                            continue
+                        fi
+
+                        if [[ "$sub_choice" == "1" ]]; then SELECTED_MODEL_REPO="$m_chat"; LLM_DEFAULT_MODEL_CHOICE="1";
+                        elif [[ "$sub_choice" == "2" ]]; then SELECTED_MODEL_REPO="$m_code"; LLM_DEFAULT_MODEL_CHOICE="2";
+                        elif [[ "$sub_choice" == "3" ]]; then SELECTED_MODEL_REPO="$m_moe"; LLM_DEFAULT_MODEL_CHOICE="3";
+                        elif [[ "$sub_choice" == "4" ]]; then SELECTED_MODEL_REPO="$m_vision"; LLM_DEFAULT_MODEL_CHOICE="4";
+                        else
+                            echo -e "\nInvalid choice. Please try again." && sleep 1
+                            continue
+                        fi
+                        break
+                    done
                 fi
                 fi
 
                 MASTER_SELECTIONS[$master_index]=$((1 - MASTER_SELECTIONS[$master_index]))
 
-                if [[ $master_index -eq 15 && ${MASTER_SELECTIONS[15]} -eq 1 && "$IS_DIFFERENT_USER" == false ]]; then
-                    MASTER_SELECTIONS[15]=0
-                    echo -e "\n❌ [Blocked] OpenClaw cannot be installed for the current sudo user."
-                    echo -e "Please restart the script and select '2. A different/new user' at the beginning." && sleep 4
+                if [[ $master_index -eq 15 && ${MASTER_SELECTIONS[15]} -eq 1 ]]; then
+                    if [[ "$IS_DIFFERENT_USER" == false ]]; then
+                        echo -e "\n❌ [Blocked] OpenClaw cannot be installed for the current sudo user."
+                        read -p "Do you want to create/select a dedicated standard user now? [y/N]: " fix_user
+                        if [[ "$fix_user" == "y" || "$fix_user" == "Y" ]]; then
+                            echo ""
+                            determine_target_user
+                            if [[ "$IS_DIFFERENT_USER" == true ]]; then
+                                echo -e "\n✅ Target user updated to '$TARGET_USER'. OpenClaw selected." && sleep 2
+                            else
+                                MASTER_SELECTIONS[15]=0
+                                echo -e "\n❌ User remains '$TARGET_USER'. OpenClaw unselected." && sleep 2
+                                continue
+                            fi
+                        else
+                            MASTER_SELECTIONS[15]=0
+                            echo -e "\n❌ OpenClaw unselected." && sleep 2
+                            continue
+                        fi
+                    fi
+                    
+                    echo ""
+                    echo -e "\e[1;33mWARNING: Do not expose OpenClaw on a VPS connected directly to the internet without proper security.\e[0m"
+                    read -p "Do you want to expose OpenClaw to the network (bind to 0.0.0.0)? [y/N]: " expose_oc
+                    if [[ "$expose_oc" == "y" || "$expose_oc" == "Y" ]]; then
+                        EXPOSE_OPENCLAW="y"
+                    else
+                        EXPOSE_OPENCLAW="n"
+                    fi
+                    
+                    echo ""
+                    read -p "Do you want to run OpenClaw on port 8082 instead of the default 18789? [y/N]: " oc_port_choice
+                    if [[ "$oc_port_choice" == "y" || "$oc_port_choice" == "Y" ]]; then
+                        OPENCLAW_PORT="8082"
+                    else
+                        OPENCLAW_PORT="18789"
+                    fi
+                fi
+
+                if [[ $master_index -eq 15 && ${MASTER_SELECTIONS[15]} -eq 0 ]]; then
+                    EXPOSE_OPENCLAW="n"
+                    OPENCLAW_PORT="18789"
                 fi
 
                 if [[ $master_index -eq 14 && ${MASTER_SELECTIONS[14]} -eq 0 ]]; then
@@ -2152,7 +2512,7 @@ main() {
                 # Dependency logic for Local LLM Stack (index 14)
                 if [[ $master_index -eq 14 && ${MASTER_SELECTIONS[14]} -eq 1 ]]; then
                     local auto_selected=""
-                    if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y") && ${MASTER_SELECTIONS[3]} -eq 0 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then MASTER_SELECTIONS[3]=1; ensure_active_index 3; auto_selected+="Docker, "; fi
+            if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y" || "$INSTALL_LIBRECHAT" == "y" || "$INSTALL_LIBRECHAT" == "Y") && ${MASTER_SELECTIONS[3]} -eq 0 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then MASTER_SELECTIONS[3]=1; ensure_active_index 3; auto_selected+="Docker, "; fi
                     if [[ "$LLM_BACKEND_CHOICE" == "llama_cuda" && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[10]} -eq 0 && ${MASTER_INSTALLED_STATE[10]} -eq 0 ]]; then MASTER_SELECTIONS[10]=1; ensure_active_index 10; auto_selected+="CUDA, "; fi
                     if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y" || "$LLM_BACKEND_CHOICE" == "llama_cuda") && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[12]} -eq 0 && ${MASTER_INSTALLED_STATE[12]} -eq 0 ]]; then MASTER_SELECTIONS[12]=1; ensure_active_index 12; auto_selected+="NVIDIA CTK, "; fi
                     if [[ -n "$auto_selected" ]]; then
@@ -2206,10 +2566,10 @@ main() {
 
     # 3. Local LLM Stack (14) -> Various
     if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then
-        if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y") && ${MASTER_SELECTIONS[3]} -eq 0 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then
+        if [[ ("$INSTALL_OPENWEBUI" == "y" || "$INSTALL_OPENWEBUI" == "Y" || "$INSTALL_LIBRECHAT" == "y" || "$INSTALL_LIBRECHAT" == "Y") && ${MASTER_SELECTIONS[3]} -eq 0 && ${MASTER_INSTALLED_STATE[3]} -eq 0 ]]; then
             MASTER_SELECTIONS[3]=1
             validation_warnings=1
-            echo -e "\n\e[1;33m[Validation Fix]\e[0m Docker auto-added as it is required by Open-WebUI."
+            echo -e "\n\e[1;33m[Validation Fix]\e[0m Docker auto-added as it is required by Open-WebUI/LibreChat."
         fi
         if [[ "$LLM_BACKEND_CHOICE" == "llama_cuda" && "$HAS_NVIDIA_GPU" == true && ${MASTER_SELECTIONS[10]} -eq 0 && ${MASTER_INSTALLED_STATE[10]} -eq 0 ]]; then
             MASTER_SELECTIONS[10]=1
@@ -2233,7 +2593,8 @@ main() {
     local required_gb=5 # Base requirement for general system updates and basic tools
     if [[ ${MASTER_SELECTIONS[10]} -eq 1 ]]; then required_gb=$((required_gb + 5)); fi # CUDA Toolkit
     if [[ ${MASTER_SELECTIONS[12]} -eq 1 ]]; then required_gb=$((required_gb + 2)); fi # NVIDIA Container Toolkit & Docker usage
-    if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then required_gb=$((required_gb + 10)); fi # LLM Models and Open-WebUI image
+    if [[ ${MASTER_SELECTIONS[14]} -eq 1 ]]; then required_gb=$((required_gb + 10)); fi # LLM Models and UI images
+    if [[ "$INSTALL_LIBRECHAT" == "y" || "$INSTALL_LIBRECHAT" == "Y" ]]; then required_gb=$((required_gb + 2)); fi # LibreChat Docker images
     
     local free_space_mb
     free_space_mb=$(df -m "$TARGET_USER_HOME" | awk 'NR==2 {print $4}')
@@ -2302,8 +2663,11 @@ main() {
         local EXPOSE_KEYS=()
         local EXPOSE_SELECTIONS=()
 
-        if [ -f "$TARGET_USER_HOME/.openclaw/openclaw.json" ]; then
-            EXPOSE_OPTIONS+=("OpenClaw Gateway (Port 18789)")
+        local current_oc_port="${OPENCLAW_PORT:-18789}"
+        if [ -f "$TARGET_USER_HOME/.openclaw/openclaw.json" ]; then current_oc_port=$(sudo jq -r '.gateway.port // 18789' "$TARGET_USER_HOME/.openclaw/openclaw.json" 2>/dev/null); fi
+
+        if [ -f "$TARGET_USER_HOME/.openclaw/openclaw.json" ] && [[ "$EXPOSE_OPENCLAW" != "y" ]]; then
+            EXPOSE_OPTIONS+=("OpenClaw Gateway (Port $current_oc_port)")
             EXPOSE_KEYS+=("openclaw")
             EXPOSE_SELECTIONS+=(0)
         fi
@@ -2312,6 +2676,7 @@ main() {
         if [ ${#EXPOSE_OPTIONS[@]} -gt 0 ]; then
             while true; do
                 clear
+                print_status_header
                 echo -e "\n\e[1;36mSelect Services to Expose to the Network (Bind to 0.0.0.0):\e[0m"
                 for i in "${!EXPOSE_OPTIONS[@]}"; do
                     if [[ ${EXPOSE_SELECTIONS[$i]} -eq 1 ]]; then
@@ -2349,8 +2714,8 @@ main() {
                             local tmp_json=$(mktemp)
                             sudo jq '.gateway.bind = "0.0.0.0"' "$oc_conf" > "$tmp_json" && \
                             sudo mv "$tmp_json" "$oc_conf" && sudo chown "$TARGET_USER":"$TARGET_USER" "$oc_conf"
-                            sudo ufw allow 18789/tcp &>/dev/null || true
-                            exposed_msg+="  - OpenClaw Gateway is at IP:18789\n"
+                            sudo ufw allow $current_oc_port/tcp &>/dev/null || true
+                            exposed_msg+="  - OpenClaw Gateway is at IP:$current_oc_port\n"
                             ;;
                     esac
                 fi
@@ -2358,28 +2723,33 @@ main() {
             if [[ $applied_exposures -eq 1 ]]; then print_success "Exposure settings applied."; fi
         fi
 
+        if [[ "$EXPOSE_OPENCLAW" == "y" ]]; then
+            exposed_msg+="  - OpenClaw Gateway is at IP:$OPENCLAW_PORT\n"
+        fi
         if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
             if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then
                 exposed_msg+="  - Ollama is at IP:11434\n"
             else
-                exposed_msg+="  - llama.cpp is at IP:8081 (or 8080 depending on configuration)\n"
+                exposed_msg+="  - llama.cpp is at IP:8080\n"
             fi
-        elif [[ "$EXPOSE_LLAMA_SERVER" == "y" ]]; then
-            exposed_msg+="  - llama.cpp is at IP:8081 (or 8080 depending on configuration)\n"
         fi
         if [[ "$INSTALL_OPENWEBUI" == "y" ]]; then
-            exposed_msg+="  - Open-WebUI is at IP:8080\n"
+            exposed_msg+="  - Open-WebUI is at IP:8081\n"
+        fi
+        if [[ "$INSTALL_LIBRECHAT" == "y" ]]; then
+            exposed_msg+="  - LibreChat is at IP:$LIBRECHAT_PORT\n"
         fi
         
         if [[ "${POST_INSTALL_ACTIONS[*]}" == *"ufw"* || -n "$exposed_msg" || "$ENABLE_UFW_AUTOMATICALLY" == "y" ]]; then
             echo -e "\n\e[1;33mIMPORTANT: Firewall rules have been configured, but UFW is NOT enabled by default.\e[0m"
             echo -e "\e[1;36mThe following UFW rules have been prepared:\e[0m"
             echo "  - ALLOW 22/tcp (SSH)"
-            if [[ ${MASTER_SELECTIONS[15]} -eq 1 ]]; then echo "  - ALLOW 18789/tcp (OpenClaw Gateway)"; fi
-            if [[ "$EXPOSE_LLM_ENGINE" == "y" || "$EXPOSE_LLAMA_SERVER" == "y" ]]; then
-                if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then echo "  - ALLOW 11434/tcp (Ollama API)"; else echo "  - ALLOW 8081/tcp (llama.cpp Server)"; fi
+            if [[ "$exposed_msg" == *"OpenClaw Gateway"* ]]; then echo "  - ALLOW $current_oc_port/tcp (OpenClaw Gateway)"; fi
+            if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
+                if [[ "$LLM_BACKEND_CHOICE" == "ollama" ]]; then echo "  - ALLOW 11434/tcp (Ollama API)"; else echo "  - ALLOW 8080/tcp (llama.cpp Server)"; fi
             fi
-            if [[ "$INSTALL_OPENWEBUI" == "y" ]]; then echo "  - ALLOW 8080/tcp (Open-WebUI)"; fi
+            if [[ "$INSTALL_OPENWEBUI" == "y" ]]; then echo "  - ALLOW 8081/tcp (Open-WebUI)"; fi
+            if [[ "$INSTALL_LIBRECHAT" == "y" ]]; then echo "  - ALLOW $LIBRECHAT_PORT/tcp (LibreChat)"; fi
             echo ""
             
             local enable_ufw="n"
@@ -2393,6 +2763,7 @@ main() {
             if [[ "$enable_ufw" == "y" || "$enable_ufw" == "Y" ]]; then
                 sudo ufw default deny incoming &>/dev/null || true
                 sudo ufw allow 22/tcp &>/dev/null || true
+                if [[ "$INSTALL_LIBRECHAT" == "y" ]]; then sudo ufw allow $LIBRECHAT_PORT/tcp &>/dev/null || true; fi
                 sudo ufw --force enable
                 print_success "UFW firewall enabled."
             else
