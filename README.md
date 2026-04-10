@@ -1,11 +1,33 @@
-# Ubuntu Local AI, Ollama, LLama.cpp & Openclaw Prep adn Installation script
+# Ubuntu Local AI, Ollama, Llama.cpp, LibreChat & OpenClaw Prep and Installation Script
 
-This script automates the setup and configuration of a fresh Ubuntu LTS system to run Ollama aor LLama.cpp with CUDA, loads selects and loads the model and configures the Chat UIs. It provides an interactive menu to install essential developer tools, software stacks, and configurations, turning a new OS into a ready-to-use AI development environment.
+This script automates the setup and configuration of a fresh Ubuntu LTS system to run Ollama or Llama.cpp with CUDA, automatically selects and loads the best model for your hardware, and configures powerful Chat UIs (Open-WebUI and LibreChat). It provides an interactive menu to install essential developer tools, software stacks, and configurations, turning a new OS into a ready-to-use AI development environment.
+
+## Interactive Menus
+
+The script features intuitive, keyboard-driven menus to easily customize your installation without needing to edit configuration files.
+
+**Goal Selection:**
+```text
+--- Ubuntu Prep Script Menu ---
+Hardware: NVIDIA GPU/vGPU Detected
+Target User: openclaw (/home/openclaw)
+
+Select Installation Goals:
+ [x] 1. OpenClaw Server Setup (Core tools, Docker, Node.js, OpenClaw)
+ [x] 2. VGPU Setup (NVIDIA Driver, CUDA, Container Toolkit, cuDNN)
+ [x] 3. Local LLM Setup (Ollama, llama.cpp, Open-WebUI, LibreChat)
+```
+
+**Hardware-Aware Configuration:**
+The script dynamically detects your system resources. For example:
+- If no NVIDIA GPU is detected, the vGPU and CUDA options automatically disable themselves to prevent broken configurations.
+- The **VRAM-Aware LLM Selection** measures your GPU VRAM (or System RAM) and automatically recommends models tailored exactly to your memory limits!
+- A built-in disk space checker warns you if your selected options exceed your partition's available storage.
 
 ## Features
 
 - **Interactive Menu**: Choose exactly what you want to install, with smart dependency auto-selection and detection of already installed tools `[✓]`.
-- **Multi-User Support**: Install user-specific tools to your current user or seamlessly create and configure a new dedicated standard user.
+- **Multi-User Support**: Install user-specific tools to your current user or seamlessly create and configure a new dedicated standard user (bypasses interactive prompts for fast creation).
 - **System Initialization**: Updates and upgrades all system packages.
 - **Zsh & Oh My Zsh**: Installs Zsh, Oh My Zsh, and essential plugins (`zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-history-substring-search`).
 - **Developer Tools**: Installs `git`, `tmux`, `curl`, `wget`, `micro`, and the `gcc` compiler.
@@ -21,11 +43,14 @@ This script automates the setup and configuration of a fresh Ubuntu LTS system t
 - **AI/ML Tools**: Installs Google Gemini CLI and OpenClaw.
 - **Local LLM Support**: 
     - Builds `llama.cpp` from source with CUDA support or installs `ollama`.
-    - Sets up the `open-webui` Docker container with optional automated daily updates.
+    - Sets up **Open-WebUI** and **LibreChat** via Docker with optional automated daily updates and seamless backend integration (auto-generates `librechat.yaml` to connect local APIs).
     - Features a **VRAM-aware model recommendation engine** to automatically select and pull the best LLMs for your specific hardware tier.
+    - Automatically configures **CORS (Cross-Origin Resource Sharing)** for both Ollama (`OLLAMA_ORIGINS`) and llama.cpp (`--cors`) so external frontends can securely connect without browser policy errors.
+    - Bulletproof model downloading with native progress bars and automatic error-handling/retries for Hugging Face and Ollama repositories.
     - Installs systemd services to run your LLM backend automatically on boot.
 - **Security & Networking**: Automatically configures the UFW firewall to secure your exposed network services, LLM endpoints, and SSH.
-- **Secure Configuration**: Helps create and manage API keys in a separate `.env.secrets` file.
+- **Secure Configuration**: Helps create and manage API keys safely in a separate `.env.secrets` file, immune to special character injection.
+- **Model Validation**: Includes a `check-models.sh` utility to automatically validate Hugging Face and Ollama model repositories, including deep `.gguf` file verification and API request deduplication to prevent rate-limiting.
 - **Pre-flight Checks**: Verifies the script is running on Ubuntu and not as the root user.
 
 ## Prerequisites
@@ -67,7 +92,7 @@ The script will create a `~/.env.secrets` file to store your API keys securely. 
 
 nano ~/.env.secrets
 
-Paste:
+Example:
 
 ```bash
 # --- API Key Placeholders ---

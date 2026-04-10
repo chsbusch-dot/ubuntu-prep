@@ -1067,23 +1067,38 @@ install_local_llm() {
         if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && -n "$LLAMACPP_MODEL_REPO" ]]; then hf_args="--hf-repo \"$LLAMACPP_MODEL_REPO\""; fi
 
         if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
-            print_info "Pulling selected model..."
-            local cmd_prefix="export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
-            
-            (
-                local elapsed=0
-                while true; do
-                    sleep 10
-                    elapsed=$((elapsed + 10))
-                    echo -e "\r\e[1;36mℹ️ Still downloading model... ($elapsed seconds elapsed)\e[0m"
-                done
-            ) &
-            local spinner_pid=$!
+            while true; do
+                print_info "Pulling and verifying selected model (this will show native download progress)..."
+                local cmd_prefix="export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\"; llama-cli"
+                
+                local pull_status=0
+                # Run without background spinner to show native 0-100% download progress
+                # Safely trap the error code to prevent 'set -e' script termination
+                sudo -u "$TARGET_USER" bash -c "echo '/exit' | $cmd_prefix $hf_args -ngl 0 -n 1 -p \"System Ready.\"" || pull_status=$?
 
-            sudo -u "$TARGET_USER" bash -c "echo '/exit' | $cmd_prefix $hf_args -ngl 0 -n 1 -p \"Ready.\"" >/dev/null 2>&1 || true
+                echo ""
 
-            kill "$spinner_pid" 2>/dev/null || true
-            wait "$spinner_pid" 2>/dev/null || true
+                if [[ $pull_status -eq 0 ]]; then
+                    print_success "Model successfully downloaded and verified."
+                    break
+                else
+                    echo -e "\n❌ \e[1;31mFailed to download or load the model from Hugging Face.\e[0m"
+                    echo "The repository might be gated, mistyped, or non-existent."
+                    read -p "Enter a valid Hugging Face repository (e.g., 'bartowski/Qwen2.5-Coder-7B-Instruct-GGUF') or type 'skip': " fallback_repo
+                    if [[ "$fallback_repo" == "skip" || "$fallback_repo" == "Skip" ]]; then
+                        print_info "Skipping default model load."
+                        break
+                    elif [[ -n "$fallback_repo" ]]; then
+                        local custom_repo="${fallback_repo%:*}"
+                        local custom_file="${fallback_repo#*:}"
+                        if [[ "$custom_repo" != "$custom_file" && -n "$custom_file" ]]; then
+                            hf_args="--hf-repo \"$custom_repo\" --hf-file \"$custom_file\""
+                        else
+                            hf_args="--hf-repo \"$custom_repo\""
+                        fi
+                    fi
+                fi
+            done
         fi
 
         local llama_host_args="--port 8080"
@@ -1267,7 +1282,7 @@ EOF"
         local ngl_test_args="-ngl 99"
         if [[ "$install_llamacpp_cpu" == "y" ]]; then ngl_test_args="-ngl 0"; fi
 
-        sudo -u "$TARGET_USER" bash -c "$test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 $ngl_test_args" > "$tmp_out" 2>&1 &
+        sudo -u "$TARGET_USER" bash -c "$test_cmd_prefix --hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf -p \"Once upon a time,\" -n 128 $ngl_test_args < /dev/null" > "$tmp_out" 2>&1 &
         local cli_pid=$!
 
         (
