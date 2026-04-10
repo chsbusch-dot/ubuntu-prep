@@ -101,7 +101,7 @@ get_model_recommendations() {
                 REC_MODEL_VISION="unsloth/gemma-4-E4B-it-GGUF" ;;
             16) REC_MODEL_CHAT="unsloth/gemma-4-E4B-it-GGUF"
                 REC_MODEL_CODE="Qwen/Qwen2.5-Coder-14B-Instruct-GGUF"
-                REC_MODEL_MOE="unsloth/Mixtral-8x7B-Instruct-v0.1-GGUF"
+                REC_MODEL_MOE="TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF"
                 REC_MODEL_VISION="cjpais/llava-v1.6-vicuna-13b-gguf" ;;
             24) REC_MODEL_CHAT="unsloth/gemma-4-26B-A4B-it-GGUF"
                 REC_MODEL_CODE="Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"
@@ -238,7 +238,7 @@ determine_target_user() {
             print_info "Target user '$TARGET_USER' already exists."
         else
             print_info "Creating user '$TARGET_USER'..."
-            sudo adduser "$TARGET_USER"
+            sudo adduser --gecos "" "$TARGET_USER"
             print_success "Standard user '$TARGET_USER' created successfully."
         fi
         # Get home directory path correctly, even for non-standard home dirs
@@ -280,30 +280,34 @@ configure_timezone() {
         fi
     fi
 
-    read -p "Enter timezone (Continent/City) or press Enter to keep default [$tz]: " user_tz
+    while true; do
+        read -p "Enter timezone (Continent/City) or press Enter to keep default [$tz]: " user_tz
 
-    if [[ -n "$user_tz" ]]; then
-        tz="$user_tz"
-    fi
-
-    print_info "Setting timezone to '$tz' and enabling NTP..."
-    if sudo timedatectl set-timezone "$tz" 2>/dev/null; then
-        sudo timedatectl set-ntp true 2>/dev/null || true
-        print_success "Timezone set to $tz and NTP synced."
-        export GLOBAL_SYSTEM_TIMEZONE="$tz"
-        
-        # If the secrets file already exists, update or append it
-        if sudo test -f "$env_file"; then
-            if sudo grep -q "SYSTEM_TIMEZONE" "$env_file"; then
-                sudo -u "$TARGET_USER" sed -i "s|^.*export SYSTEM_TIMEZONE=.*|export SYSTEM_TIMEZONE=\"$tz\"|" "$env_file"
-            else
-                echo "export SYSTEM_TIMEZONE=\"$tz\"" | sudo -u "$TARGET_USER" tee -a "$env_file" > /dev/null
-            fi
+        local attempt_tz="$tz"
+        if [[ -n "$user_tz" ]]; then
+            attempt_tz="$user_tz"
         fi
-    else
-        echo -e "❌ \e[1;31mFailed to set timezone.\e[0m Ensure it is a valid format like 'America/Los_Angeles'."
-        export GLOBAL_SYSTEM_TIMEZONE="America/Los_Angeles"
-    fi
+
+        print_info "Setting timezone to '$attempt_tz' and enabling NTP..."
+        if sudo timedatectl set-timezone "$attempt_tz" 2>/dev/null; then
+            tz="$attempt_tz"
+            sudo timedatectl set-ntp true 2>/dev/null || true
+            print_success "Timezone set to $tz and NTP synced."
+            export GLOBAL_SYSTEM_TIMEZONE="$tz"
+            
+            # If the secrets file already exists, update or append it
+            if sudo test -f "$env_file"; then
+                if sudo grep -q "SYSTEM_TIMEZONE" "$env_file"; then
+                    sudo -u "$TARGET_USER" sed -i "s|^.*export SYSTEM_TIMEZONE=.*|export SYSTEM_TIMEZONE=\"$tz\"|" "$env_file"
+                else
+                    echo "export SYSTEM_TIMEZONE=\"$tz\"" | sudo -u "$TARGET_USER" tee -a "$env_file" > /dev/null
+                fi
+            fi
+            break
+        else
+            echo -e "❌ \e[1;31mInvalid timezone: '$attempt_tz'.\e[0m Please enter a valid format like 'America/Los_Angeles'."
+        fi
+    done
 }
 
 # Function to configure API keys for either bash or zsh
@@ -336,7 +340,6 @@ setup_env_secrets() {
 # export ESXI_USER="root"
 # export ESXI_PASSWORD="your_esxi_password"
 # export OLLAMA_ALLOWED_ORIGINS="https://chat.yourdomain.com,http://localhost:8081"
-export SYSTEM_TIMEZONE="${GLOBAL_SYSTEM_TIMEZONE:-America/Los_Angeles}"
 export TZ="${GLOBAL_SYSTEM_TIMEZONE:-America/Los_Angeles}"
 EOF
         sudo chmod 600 "$TARGET_USER_HOME/.env.secrets"
@@ -365,7 +368,11 @@ EOF
                     for key_name in "${keys_to_prompt[@]}"; do
                         read -p "Enter value for ${key_name}: " key_value
                         if [[ -n "$key_value" ]]; then
-                            sudo -u "$TARGET_USER" sed -i "s|# export ${key_name}=.*|export ${key_name}=\"${key_value}\"|" "$TARGET_USER_HOME/.env.secrets"
+                            # Escape double quotes to prevent breaking the bash string syntax
+                            local safe_val="${key_value//\"/\\\"}"
+                            # Disable the placeholder and safely append the value to avoid sed delimiter injection
+                            sudo -u "$TARGET_USER" sed -i "s|^# export ${key_name}=.*|# (Configured) ${key_name}|" "$TARGET_USER_HOME/.env.secrets"
+                            echo "export ${key_name}=\"${safe_val}\"" | sudo -u "$TARGET_USER" tee -a "$TARGET_USER_HOME/.env.secrets" > /dev/null
                         fi
                     done
                     print_success "API keys have been saved to $TARGET_USER_HOME/.env.secrets."
@@ -1623,7 +1630,7 @@ check_installations() {
     if ! command -v ollama &> /dev/null; then llm_installed=0; fi
     if ! sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then llm_installed=0; fi
     if [[ $llm_installed -eq 1 ]]; then
-        print_info "Found existing Local LLM Stack (Ollama, llama.cpp, Open-WebUI)."
+        print_info "Found existing Local LLM Stack (Ollama, llama.cpp, Open-WebUI, LibreChat)."
         MASTER_INSTALLED_STATE[14]=1
     fi
 
@@ -2022,7 +2029,7 @@ main() {
         "Install gcc compiler"
         "Install NVIDIA Container Toolkit"
         "Install cuDNN"
-        "Install Local LLM Support (Ollama, llama.cpp, Open-WebUI)"
+        "Install Local LLM Support (Ollama, llama.cpp, Open-WebUI, LibreChat)"
         "Install OpenClaw"
     )
 
@@ -2063,7 +2070,7 @@ main() {
     local GOAL_OPTIONS=(
         "OpenClaw Server Setup (Core tools, Docker, Node.js, OpenClaw)"
         "VGPU Setup (NVIDIA Driver, CUDA, Container Toolkit, cuDNN)"
-        "Local LLM Setup (Ollama, llama.cpp, Open-WebUI)"
+        "Local LLM Setup (Ollama, llama.cpp, Open-WebUI, LibreChat)"
     )
 
     while true; do
@@ -2174,6 +2181,7 @@ main() {
                 
                 local opt_options=(
                     "Install open Web UI?"
+                    "Install LibreChat?"
                     "Allow external connections to ${LLM_BACKEND_CHOICE} (bind 0.0.0.0)?"
                     "Load default model?"
                 )
@@ -2216,7 +2224,7 @@ main() {
                     if [[ ${opt_selections[$i]} -eq 1 ]]; then
                         case "${opt_options[$i]}" in
                             "Install open Web UI?") INSTALL_OPENWEBUI="y" ;;
-                    "Install LibreChat?") INSTALL_LIBRECHAT="y" ;;
+                            "Install LibreChat?") INSTALL_LIBRECHAT="y" ;;
                             "Allow external connections to "*0.0.0.0?) EXPOSE_LLM_ENGINE="y" ;;
                             "Load default model?") LOAD_DEFAULT_MODEL="y" ;;
                             "Install llama.cpp model as system service?") INSTALL_LLAMA_SERVICE="y" ;;
@@ -2291,7 +2299,7 @@ main() {
                                     fi
                                     OLLAMA_PULL_MODEL="$raw_input"
                                     echo ""
-                                    read -n 1 -s -r -t 5 -p "Press any key to continue (or wait 5s)..."
+                                    read -n 1 -s -r -t 5 -p "Press any key to continue (or wait 5s)..." || true
                                     echo ""
                                     break
                                 done
@@ -2363,7 +2371,7 @@ main() {
                                     fi
                                     LLAMACPP_MODEL_REPO="$raw_input"
                                     echo ""
-                                    read -n 1 -s -r -t 5 -p "Press any key to continue (or wait 5s)..."
+                                    read -n 1 -s -r -t 5 -p "Press any key to continue (or wait 5s)..." || true
                                     echo ""
                                     break
                                 done

@@ -13,8 +13,8 @@ echo "📦 Extracting model lists from ubuntu-prep-setup.sh..."
 eval "$(sed -n '/^get_model_recommendations() {/,/^}/p' "$SETUP_SCRIPT")"
 
 VRAM_TIERS=(8 16 24 32 48 72 96)
-OLLAMA_MODELS_RAW=("gemma4:e2b")
-HF_MODELS_RAW=("unsloth/gemma-4-E2B-it-GGUF")
+OLLAMA_MODELS_RAW=()
+HF_MODELS_RAW=()
 
 for vram in "${VRAM_TIERS[@]}"; do
     get_model_recommendations "ollama" "$vram"
@@ -29,7 +29,7 @@ OLLAMA_MODELS=($(printf "%s\n" "${OLLAMA_MODELS_RAW[@]}" | sort -u | grep -v '^$
 HF_MODELS=($(printf "%s\n" "${HF_MODELS_RAW[@]}" | sort -u | grep -v '^$'))
 echo ""
 
-echo "🔍 Checking Ollama Models..."
+echo "🔍 Checking ${#OLLAMA_MODELS[@]} Unique Ollama Models (deduplicated from ${#OLLAMA_MODELS_RAW[@]} entries)..."
 for model in "${OLLAMA_MODELS[@]}"; do
     base_model=$(echo "$model" | cut -d':' -f1)
     # The Ollama library returns 200 OK for valid base models
@@ -41,25 +41,46 @@ for model in "${OLLAMA_MODELS[@]}"; do
     fi
 done
 
-echo -e "\n🔍 Checking Hugging Face (llama.cpp) Models..."
+echo -e "\n🔍 Checking ${#HF_MODELS[@]} Unique Hugging Face (llama.cpp) Models (deduplicated from ${#HF_MODELS_RAW[@]} entries)..."
 
 # Grab HF_TOKEN from .env.secrets if it exists
 HF_TOKEN=$(bash -c "source \"$HOME/.env.secrets\" 2>/dev/null && echo \"\$HF_TOKEN\"" | tr -d '\r')
 
-for repo in "${HF_MODELS[@]}"; do
-    # Check /tree/main instead of the root to avoid false positives on empty placeholder repos
-    curl_cmd=(curl -s -o /dev/null -w "%{http_code}")
+for entry in "${HF_MODELS[@]}"; do
+    repo_name="${entry%:*}"
+    file_name=""
+    if [[ "$entry" == *":"* ]]; then
+        file_name="${entry#*:}"
+    fi
+
+    curl_cmd=(curl -s -w "\n%{http_code}")
     if [[ -n "$HF_TOKEN" ]]; then
         curl_cmd+=(-H "Authorization: Bearer $HF_TOKEN")
     fi
-    curl_cmd+=("https://huggingface.co/api/models/$repo/tree/main")
+    curl_cmd+=("https://huggingface.co/api/models/$repo_name/tree/main")
     
-    status=$("${curl_cmd[@]}")
+    response=$("${curl_cmd[@]}")
+    status=$(echo "$response" | tail -n 1)
+    body=$(echo "$response" | sed '$d')
+
     if [ "$status" -eq 200 ]; then
-        echo -e "✅ [OK] $repo"
+        if [[ -n "$file_name" ]]; then
+            if echo "$body" | grep -q "\"path\":\"$file_name\""; then
+                echo -e "✅ [OK] $entry (File '$file_name' found)"
+            else
+                echo -e "❌ [MISSING] $entry (File '$file_name' NOT found in repo)"
+            fi
+        else
+            if echo "$body" | grep -qi '\.gguf"'; then
+                count=$(echo "$body" | grep -io '\.gguf"' | wc -l | awk '{print $1}')
+                echo -e "✅ [OK] $entry (Found $count GGUF files)"
+            else
+                echo -e "❌ [NO GGUF] $entry (No .gguf files found in repo)"
+            fi
+        fi
     elif [ "$status" -eq 401 ] || [ "$status" -eq 403 ]; then
-        echo -e "🔒 [GATED] $repo (Requires HF_TOKEN and License Agreement)"
+        echo -e "🔒 [GATED] $entry (Requires HF_TOKEN and License Agreement)"
     else
-        echo -e "❌ [ERROR] $repo (HTTP $status)"
+        echo -e "❌ [ERROR] $entry (HTTP $status)"
     fi
 done
