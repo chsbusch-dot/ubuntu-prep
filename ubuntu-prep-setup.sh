@@ -44,6 +44,7 @@ EXPOSE_OPENCLAW="n"
 OPENCLAW_PORT="18789"
 # shellcheck disable=SC2034 # Reserved for future use
 EXPOSE_LLAMA_SERVER="n"
+RUN_LLAMA_BENCH="n"
 LOAD_DEFAULT_MODEL="n"
 LLM_DEFAULT_MODEL_CHOICE=""
 SELECTED_MODEL_REPO=""
@@ -1261,40 +1262,7 @@ install_local_llm() {
         if [[ "$LLM_DEFAULT_MODEL_CHOICE" =~ ^[1-4]$ ]]; then hf_args="--hf-repo $SELECTED_MODEL_REPO"; fi
         if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "6" && -n "$LLAMACPP_MODEL_REPO" ]]; then hf_args="--hf-repo $LLAMACPP_MODEL_REPO"; fi
 
-        if [[ "$LOAD_DEFAULT_MODEL" == "y" ]]; then
-            while true; do
-                print_info "Pulling and verifying selected model (this will show native download progress)..."
-                local secrets_source="[ -f \"$TARGET_USER_HOME/.env.secrets\" ] && source \"$TARGET_USER_HOME/.env.secrets\";"
-                local env_prefix="$secrets_source export LLAMA_CACHE=\"$TARGET_USER_HOME/llama.cpp/models/models-user\"; export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\";"
-
-                local pull_status=0
-                # Force the CLI to exit immediately by piping '/exit' directly into it
-                sudo -u "$TARGET_USER" bash -c "$env_prefix echo '/exit' | llama-cli $hf_args -ngl 0 -n 1 -p \"System Ready.\" < /dev/null" || pull_status=$?
-
-                echo ""
-
-                if [[ $pull_status -eq 0 ]]; then
-                    print_success "Model successfully downloaded and verified."
-                    break
-                else
-                    echo -e "\n❌ \e[1;31mFailed to download or load the model from Hugging Face.\e[0m"
-                    echo "The repository might be gated, mistyped, or non-existent."
-                    read -p "Enter a valid Hugging Face repository (e.g., 'bartowski/Qwen2.5-Coder-7B-Instruct-GGUF') or type 'skip': " fallback_repo
-                    if [[ "$fallback_repo" == "skip" || "$fallback_repo" == "Skip" ]]; then
-                        print_info "Skipping default model load."
-                        break
-                    elif [[ -n "$fallback_repo" ]]; then
-                        local custom_repo="${fallback_repo%:*}"
-                        local custom_file="${fallback_repo#*:}"
-                        if [[ "$custom_repo" != "$custom_file" && -n "$custom_file" ]]; then
-                            hf_args="--hf-repo $custom_repo --hf-file $custom_file"
-                        else
-                            hf_args="--hf-repo $custom_repo"
-                        fi
-                    fi
-                fi
-            done
-        fi
+        # Model is downloaded via llama-bench (if selected) or on first llama-server start via --hf-repo
 
         local llama_host_args="--port 8080"
         if [[ "$install_llamacpp_cuda" == "y" ]]; then
@@ -1333,6 +1301,63 @@ SERVICEEOF
             sudo systemctl daemon-reload
             sudo systemctl enable --now llama-server
             print_success "llama.cpp service installed and started on port 8080."
+        fi
+
+        # RUN_LLAMA_BENCH — run llama-bench on the selected model
+        if [[ "$RUN_LLAMA_BENCH" == "y" ]]; then
+            print_info "Running llama-bench performance test..."
+            print_info "This measures prompt processing (pp512) and token generation (tg128) speed."
+
+            local llama_cache_dir="$TARGET_USER_HOME/llama.cpp/models/models-user"
+            sudo -u "$TARGET_USER" mkdir -p "$llama_cache_dir"
+            local secrets_source="[ -f \"$TARGET_USER_HOME/.env.secrets\" ] && source \"$TARGET_USER_HOME/.env.secrets\";"
+            local env_prefix="$secrets_source export HOME=\"$TARGET_USER_HOME\"; export LLAMA_CACHE=\"$llama_cache_dir\"; export LD_LIBRARY_PATH=\"/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:\$LD_LIBRARY_PATH\";"
+
+            local ngl_bench=0
+            if [[ "$install_llamacpp_cuda" == "y" ]]; then ngl_bench=99; fi
+
+            local bench_out
+            bench_out=$(mktemp)
+
+            # Run bench in background, show a live timer while waiting
+            sudo -u "$TARGET_USER" bash -c \
+                "$env_prefix llama-bench $hf_args -ngl $ngl_bench -r 3 --progress -o md" \
+                2>&1 | sudo tee "$bench_out" >/dev/null &
+            local bench_pid=$!
+
+            local elapsed=0
+            while kill -0 "$bench_pid" 2>/dev/null; do
+                printf "\r\e[1;36mℹ️  llama-bench running... %ds elapsed\e[0m" "$elapsed"
+                sleep 5
+                elapsed=$((elapsed + 5))
+            done
+            printf "\r\e[K" # clear the timer line
+            wait "$bench_pid" 2>/dev/null || true
+
+            # Extract the markdown table from output
+            local bench_table
+            bench_table=$(grep -E '^\|' "$bench_out" || true)
+
+            if [[ -n "$bench_table" ]]; then
+                # Pull pp (prompt) and tg (generation) t/s from the table
+                local pp_speed tg_speed
+                pp_speed=$(grep -i "pp" "$bench_out" | grep -oP '\|\s*\K[0-9]+\.[0-9]+(?=\s*±|\s*\|)' | head -1 || true)
+                tg_speed=$(grep -i "tg" "$bench_out" | grep -oP '\|\s*\K[0-9]+\.[0-9]+(?=\s*±|\s*\|)' | head -1 || true)
+
+                echo ""
+                echo "$bench_table"
+                echo ""
+                if [[ -n "$pp_speed" && -n "$tg_speed" ]]; then
+                    print_success "Benchmark complete — Prompt: ${pp_speed} t/s | Generation: ${tg_speed} t/s"
+                else
+                    print_success "Benchmark complete."
+                fi
+            else
+                echo ""
+                print_info "Benchmark output:"
+                cat "$bench_out" || true
+            fi
+            rm -f "$bench_out"
         fi
     fi
 
