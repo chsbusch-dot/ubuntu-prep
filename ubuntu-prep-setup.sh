@@ -2486,6 +2486,7 @@ main() {
                     INSTALL_LIBRECHAT="n"
                     EXPOSE_LLM_ENGINE="n"
                     LOAD_DEFAULT_MODEL="n"
+                    RUN_LLAMA_BENCH="n"
                     LLM_DEFAULT_MODEL_CHOICE=""
                     INSTALL_LLAMA_SERVICE="n"
                     ENABLE_UFW_AUTOMATICALLY="n"
@@ -2499,6 +2500,7 @@ main() {
 
                     if [[ "$LLM_BACKEND_CHOICE" == "llama_cpu" || "$LLM_BACKEND_CHOICE" == "llama_cuda" ]]; then
                         opt_options+=("Install llama.cpp model as system service?")
+                        opt_options+=("Run llama.cpp model benchmark?")
                     fi
                     opt_options+=("Enable UFW firewall (automatically opens SSH and selected ports)?")
 
@@ -2539,6 +2541,7 @@ main() {
                                 "Allow external connections to "*0.0.0.0?) EXPOSE_LLM_ENGINE="y" ;;
                                 "Load default model?") LOAD_DEFAULT_MODEL="y" ;;
                                 "Install llama.cpp model as system service?") INSTALL_LLAMA_SERVICE="y" ;;
+                                "Run llama.cpp model benchmark?") RUN_LLAMA_BENCH="y" ;;
                                 "Enable UFW firewall (automatically opens SSH and selected ports)?") ENABLE_UFW_AUTOMATICALLY="y" ;;
                             esac
                         fi
