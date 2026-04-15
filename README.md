@@ -174,10 +174,10 @@ Let me know if you find this useful and if you encounter any bugs or issues.
 If you use this at work or to make money, please consider expensing a sponsor contribution by clicking the sponsor button above.
 
 I am working on a provate V2.0 with support for:
-- Nvidia NGC Supplort
-- vLLM                                          - https://github.com/vllm-project/vllm
-- Manifest LLM Model Router                     - https://github.com/mnfst/manifest
-- Infisical - Local API Key Secrets Managqement - https://github.com/infisical/infisical
+|Nvidia NGC Support| CLI Driver and Model download, requires Nvisia Enterprise License|
+|vLLM|Easy-to-use library for LLM inference and serving models|https://github.com/vllm-project/vllm|
+|Manifest|Smart LLM Model Router|https://github.com/mnfst/manifest|
+|Infisical|Secure, Local API Key Secrets Management|https://github.com/infisical/infisical|
 
 Let me know if you are intersted. 
 

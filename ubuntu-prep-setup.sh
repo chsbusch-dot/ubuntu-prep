@@ -3695,24 +3695,16 @@ EOF
         bash "$_oc_tmp";
         rm -f "$_oc_tmp";
 
-        # Pre-populate ~/.openclaw/.env with API keys from ~/.env.secrets so
-        # that "openclaw onboard" can pick them up non-interactively.
-        mkdir -p "$HOME/.openclaw";
-        grep -E '^export [A-Z_]*(API_KEY|TOKEN)[^=]*=' "$HOME/.env.secrets" 2>/dev/null \
-            | sed 's/^export //' \
-            > "$HOME/.openclaw/.env";
-        chmod 600 "$HOME/.openclaw/.env";
-
+        # The installer adds openclaw via npm global install.  Because it ran in
+        # a child shell its PATH changes are lost; discover the npm global bin
+        # directory now and prepend it so 'openclaw' is immediately findable.
+        hash -r 2>/dev/null || true;
+        _oc_npm_bin="$(npm bin -g 2>/dev/null || true)";
+        [ -n "$_oc_npm_bin" ] && export PATH="$_oc_npm_bin:$PATH";
         export PATH="$HOME/.local/bin:$PATH";
         export XDG_RUNTIME_DIR="/run/user/$(id -u)";
         export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus";
 
-        # Export keys into the current shell so openclaw onboard reads them
-        if [ -s "$HOME/.openclaw/.env" ]; then
-            set -o allexport;
-            source "$HOME/.openclaw/.env";
-            set +o allexport;
-        fi;
         openclaw onboard --install-daemon;
 EOF
     )
