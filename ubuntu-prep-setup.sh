@@ -1044,12 +1044,16 @@ EOF
     # Also install system-wide Node 22 LTS so OpenClaw's gateway service
     # uses a stable binary instead of NVM (prevents breakage after nvm upgrades).
     print_info "Installing system Node.js 22 LTS (recommended by openclaw doctor)..."
-    if curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >/dev/null 2>&1 &&
+    local nodesource_script
+    nodesource_script=$(mktemp)
+    if curl -fsSL https://deb.nodesource.com/setup_22.x -o "$nodesource_script" >/dev/null 2>&1 &&
+        sudo -E bash "$nodesource_script" >/dev/null 2>&1 &&
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs >/dev/null 2>&1; then
         print_success "System Node.js installed: $(node --version 2>/dev/null || echo 'see /usr/bin/node')"
     else
         print_info "System Node.js install skipped (NodeSource unavailable — NVM-only is fine)."
     fi
+    rm -f "$nodesource_script"
 
     POST_INSTALL_ACTIONS+=("nvm")
 }
