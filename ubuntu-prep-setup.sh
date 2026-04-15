@@ -4929,6 +4929,9 @@ show_menu() {
     local menu_body=""
 
     for master_index in "${ACTIVE_INDICES[@]}"; do
+        # Always hide Oh My Zsh (index 1) — not used in server setup
+        if [[ $master_index -eq 1 ]]; then continue; fi
+
         # Hide NVIDIA options (indices 7, 9 to 13) if no GPU is detected
         if [[ "$HAS_NVIDIA_GPU" == false ]] && [[ $master_index -eq 7 || ($master_index -ge 9 && $master_index -le 13) ]]; then
             continue
@@ -5203,7 +5206,7 @@ main() {
         fi
     done
 
-    if [[ ${GOAL_SELECTIONS[0]} -eq 1 ]]; then ACTIVE_INDICES+=(1 2 3 4 5 6 15); fi
+    if [[ ${GOAL_SELECTIONS[0]} -eq 1 ]]; then ACTIVE_INDICES+=(2 3 4 5 6 15); fi
     if [[ ${GOAL_SELECTIONS[1]} -eq 1 ]]; then ACTIVE_INDICES+=(7 8 9 10 11 12 13); fi
     if [[ ${GOAL_SELECTIONS[2]} -eq 1 ]]; then ACTIVE_INDICES+=(14); fi
 
