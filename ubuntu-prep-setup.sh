@@ -1112,11 +1112,6 @@ EOF"
 # 7. Install NVIDIA vGPU Driver
 install_vgpu_driver_from_link() {
     print_header "Installing NVIDIA vGPU Driver and Token"
-    read -p "Do you want to install the vGPU guest driver? [y/N]: " confirm_vgpu
-    if [[ "$confirm_vgpu" != "y" && "$confirm_vgpu" != "Y" ]]; then
-        print_info "Skipping vGPU driver installation."
-        return 0 # Exit the function gracefully
-    fi
 
     local vgpu_driver_url=""
     local vgpu_token_url=""
@@ -1131,10 +1126,23 @@ install_vgpu_driver_from_link() {
         download_auth=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DOWNLOAD_AUTH\"" | tr -d '\r')
     fi
 
+    # Probe the driver URL early: if reachable, proceed automatically — no prompt needed.
+    # Google Drive links cannot be range-probed (they return HTML), so treat them as reachable.
     if [[ -n "$env_driver_url" ]]; then
-        read -p "Found default driver URL in .env.secrets. Use this? [Y/n]: " use_default_driver
-        if [[ "$use_default_driver" != "n" && "$use_default_driver" != "N" ]]; then
+        if [[ "$env_driver_url" =~ drive\.google\.com ]]; then
+            print_success "Driver: Google Drive URL configured — will proceed."
             vgpu_driver_url="$env_driver_url"
+        else
+            print_info "Testing driver URL reachability..."
+            local probe_args=(curl --max-time 15 --silent --fail --range "0-0" -o /dev/null -L)
+            [[ -n "$download_auth" ]] && probe_args+=(-u "$download_auth")
+            probe_args+=("$env_driver_url")
+            if "${probe_args[@]}" 2>/dev/null; then
+                print_success "Driver URL is reachable — proceeding automatically."
+                vgpu_driver_url="$env_driver_url"
+            else
+                echo "⚠️  Driver URL from .env.secrets is not reachable."
+            fi
         fi
     fi
 
@@ -1149,9 +1157,9 @@ install_vgpu_driver_from_link() {
     # Retry loop: re-prompt for URL on download failure or HTML error page
     while true; do
         if [[ -z "$vgpu_driver_url" ]]; then
-            print_info "Please provide the direct download URL OR a Google Drive sharing link for the vGPU driver."
-            print_info "Supported protocols: http://, https://, ftp://, smb://  (leave blank to skip)"
-            read -p "Enter the driver download URL: " vgpu_driver_url
+            print_info "No reachable driver URL configured. Paste a direct download URL for the vGPU driver."
+            print_info "Supported: http://, https://, ftp://, smb://, Google Drive share link  (leave blank to skip)"
+            read -p "Driver URL: " vgpu_driver_url
         fi
 
         if [[ -z "$vgpu_driver_url" ]]; then
@@ -1239,10 +1247,22 @@ install_vgpu_driver_from_link() {
     fi
 
     # --- Handle vGPU Token Installation ---
+    # Probe the token URL; auto-use if reachable.  Token is optional — not all drivers need one.
     if [[ -n "$env_token_url" ]]; then
-        read -p "Found default token URL in .env.secrets. Use this? [Y/n]: " use_default_token
-        if [[ "$use_default_token" != "n" && "$use_default_token" != "N" ]]; then
+        if [[ "$env_token_url" =~ drive\.google\.com ]]; then
+            print_success "Token: Google Drive URL configured — will proceed."
             vgpu_token_url="$env_token_url"
+        else
+            print_info "Testing token URL reachability..."
+            local tok_probe_args=(curl --max-time 15 --silent --fail --range "0-0" -o /dev/null -L)
+            [[ -n "$download_auth" ]] && tok_probe_args+=(-u "$download_auth")
+            tok_probe_args+=("$env_token_url")
+            if "${tok_probe_args[@]}" 2>/dev/null; then
+                print_success "Token URL is reachable — proceeding automatically."
+                vgpu_token_url="$env_token_url"
+            else
+                echo "⚠️  Token URL from .env.secrets is not reachable."
+            fi
         fi
     fi
 
@@ -1252,8 +1272,9 @@ install_vgpu_driver_from_link() {
     # Retry loop: re-prompt for URL on download failure or HTML error page
     while true; do
         if [[ -z "$vgpu_token_url" ]]; then
-            print_info "Please provide the download URL for the vGPU license token file (leave blank to skip)."
-            read -p "Enter the token download URL: " vgpu_token_url
+            print_info "No reachable token URL configured. Paste a URL for the vGPU license token, or press Enter to skip."
+            print_info "(Not all drivers require a token — skipping is fine if yours doesn't.)"
+            read -p "Token URL (or Enter to skip): " vgpu_token_url
         fi
 
         if [[ -z "$vgpu_token_url" ]]; then
