@@ -185,7 +185,7 @@ Let me know if you are intersted.
 Let me know if I should add other packages.
 Here are some other packages thatI am considering:
 
-|| Tools | Stars | Category | Why |
+| Tools | Stars | Category | Why |
 |---|---:|---|---|
 | Qdrant | 29K | Vector DB | Every RAG tool needs one |
 | SearXNG | 27K | Web Search | Gives AI agents private web search, used by Open-WebUI |
