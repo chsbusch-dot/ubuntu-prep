@@ -1472,25 +1472,17 @@ install_cuda_toolkit() {
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get -y install cuda-toolkit
 
-    # The CUDA toolkit installs to /usr/local/cuda, which is not always in the PATH.
-    # We will add it idempotently to the user's shell configuration.
-    print_info "Verifying CUDA path in shell configuration..."
-    local cuda_env_str
-    cuda_env_str=$(
-        cat <<'EOF'
+    # The CUDA toolkit installs to /usr/local/cuda, which is not in the default PATH.
+    # Write to /etc/profile.d/ so every user (sudo caller, target user, future users)
+    # gets CUDA in PATH automatically on login — no per-user RC patching needed.
+    print_info "Writing CUDA path to /etc/profile.d/cuda.sh (system-wide)..."
+    sudo tee /etc/profile.d/cuda.sh >/dev/null <<'CUDAEOF'
+# Added by ubuntu-prep-setup.sh — CUDA Toolkit system-wide PATH
 export CUDA_HOME="/usr/local/cuda"
-export PATH="$CUDA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
-EOF
-    )
-    if sudo test -f "$TARGET_USER_HOME/.zshrc" && ! sudo grep -q 'CUDA_HOME' "$TARGET_USER_HOME/.zshrc"; then
-        print_info "Adding CUDA path to ~/.zshrc"
-        echo -e "\n# Add NVIDIA CUDA Toolkit to path\n${cuda_env_str}" | sudo tee -a "$TARGET_USER_HOME/.zshrc" >/dev/null
-    fi
-    if sudo test -f "$TARGET_USER_HOME/.bashrc" && ! sudo grep -q 'CUDA_HOME' "$TARGET_USER_HOME/.bashrc"; then
-        print_info "Adding CUDA path to ~/.bashrc"
-        echo -e "\n# Add NVIDIA CUDA Toolkit to path\n${cuda_env_str}" | sudo tee -a "$TARGET_USER_HOME/.bashrc" >/dev/null
-    fi
+export PATH="$CUDA_HOME/bin${PATH:+:$PATH}"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+CUDAEOF
+    sudo chmod 644 /etc/profile.d/cuda.sh
 
     export CUDA_HOME="/usr/local/cuda"
     export PATH="$CUDA_HOME/bin:$PATH"
