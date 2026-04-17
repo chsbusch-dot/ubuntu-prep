@@ -1499,7 +1499,11 @@ install_container_toolkit() {
     # and talks to the GPU. If the kernel module isn't loaded it will fail.
     if ! require_nvidia_module_loaded "NVIDIA Container Toolkit"; then
         echo "⚠️  Skipping Container Toolkit install — reboot first, then re-run."
-        record_component_outcome "NVIDIA Container Toolkit" "$CONTAINER_TOOLKIT_COMPONENT_ACTION" "failed"
+        # Container Toolkit has no repair path (it's a dependency installed inline
+        # from the main install flow), so the action is always "install". There is
+        # no CONTAINER_TOOLKIT_COMPONENT_ACTION global — earlier versions of this
+        # line referenced an undefined variable that silently expanded to "".
+        record_component_outcome "NVIDIA Container Toolkit" "install" "failed"
         return 1
     fi
 
