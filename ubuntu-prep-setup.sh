@@ -4262,442 +4262,221 @@ verify_installations() {
 
 # --- Final Summary ---
 
-print_final_summary() {
-    # Ensure newly installed binaries are in the script's PATH for verification
-    [ -d "/usr/local/cuda/bin" ] && export PATH="/usr/local/cuda/bin:$PATH"
+# _render_summary <mode>
+#   mode="terminal" - writes colored ANSI summary to stdout (used by print_final_summary)
+#   mode="file"     - writes plain text to stdout; caller redirects to file
+#
+# Shared body used by both print_final_summary (interactive end-of-install banner)
+# and save_ai_settings_file (~/AI-settings.txt dump, also triggered by 's' goal-menu key).
+#
+# File-mode adds: metadata header, Hardware section, llama-server runtime introspection,
+# OpenClaw token URL, ufw rules in Next Steps, target-user footer.
+# Terminal-mode uses colored helpers (print_info / print_header) and the more concise
+# section layout the user sees during install.
+_render_summary() {
+    local mode="${1:-terminal}"
+    local is_file=0
+    [[ "$mode" == "file" ]] && is_file=1
 
-    # Make array unique by converting to a string, sorting, and converting back
-    local unique_actions
-    unique_actions=$(echo "${POST_INSTALL_ACTIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+    # ── Mode-aware output helpers ────────────────────────────────────
+    _banner()    { if [[ $is_file -eq 1 ]]; then echo "===== $1 ====="; else print_header "$1"; fi; }
+    _section()   { if [[ $is_file -eq 1 ]]; then echo "$1"; else echo -e "\e[1;36m$1\e[0m"; fi; }
+    _item()      { if [[ $is_file -eq 1 ]]; then echo "$1"; else print_info "$1"; fi; }
+    _subheader() { if [[ $is_file -eq 1 ]]; then echo "  -> $1"; else echo -e "  \e[1;36m-> $1\e[0m"; fi; }
 
-    print_header "Installed Components & Verification"
+    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+    local brew_cmd="[ -f /home/linuxbrew/.linuxbrew/bin/brew ] && eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""
+    local lan_ip
+    lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
 
-    echo -e "\e[1;36mInstalled Options:\e[0m"
+    local unique_actions=""
+    if [[ ${#POST_INSTALL_ACTIONS[@]} -gt 0 ]]; then
+        unique_actions=$(printf '%s\n' "${POST_INSTALL_ACTIONS[@]}" | sort -u | tr '\n' ' ')
+    fi
+
+    _banner "Installed Components & Verification"
+
+    # File-only: metadata header
+    if [[ $is_file -eq 1 ]]; then
+        echo "Generated: $(date)"
+        echo "Host:      $(hostname)  (${lan_ip:-<ip>})"
+        echo ""
+    fi
+
+    # ── Installed Options ────────────────────────────────────────────
+    _section "Installed Options:"
+    local found_opt=0
     for i in "${!MASTER_OPTIONS[@]}"; do
-        if [[ ${MASTER_INSTALLED_STATE[$i]} -eq 1 || ${MASTER_SELECTIONS[$i]} -eq 1 ]]; then
+        if [[ ${MASTER_INSTALLED_STATE[$i]:-0} -eq 1 || ${MASTER_SELECTIONS[$i]:-0} -eq 1 ]]; then
             echo "  - ${MASTER_OPTIONS[$i]}"
+            found_opt=1
         fi
     done
+    [[ $is_file -eq 1 && $found_opt -eq 0 ]] && echo "  (none recorded)"
     echo ""
 
+    # ── Components lists ─────────────────────────────────────────────
     if [[ ${#INSTALLED_COMPONENTS[@]} -gt 0 ]]; then
-        echo -e "\e[1;36mNewly Installed Components:\e[0m"
+        _section "Newly Installed Components:"
         printf '  - %s\n' "${INSTALLED_COMPONENTS[@]}"
         echo ""
     fi
 
     if [[ ${#REPAIRED_COMPONENTS[@]} -gt 0 ]]; then
-        echo -e "\e[1;36mRepaired Components:\e[0m"
+        _section "Repaired Components:"
         printf '  - %s\n' "${REPAIRED_COMPONENTS[@]}"
         echo ""
     fi
 
     if [[ ${#FAILED_COMPONENTS[@]} -gt 0 ]]; then
-        echo -e "\e[1;31mComponents That Failed Verification:\e[0m"
+        if [[ $is_file -eq 1 ]]; then
+            echo "Failed Components:"
+        else
+            echo -e "\e[1;31mComponents That Failed Verification:\e[0m"
+        fi
         printf '  - %s\n' "${FAILED_COMPONENTS[@]}"
         echo ""
     fi
 
-    # User environment helpers
-    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
-    local brew_cmd="[ -f /home/linuxbrew/.linuxbrew/bin/brew ] && eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""
-
-    if sudo test -d "$TARGET_USER_HOME/.oh-my-zsh"; then
-        print_info "Zsh / Oh My Zsh:"
-        zsh --version || echo "Installed"
-        echo ""
-    fi
-
-    if command -v python3 &>/dev/null; then
-        print_info "Python:"
-        python3 --version
-        echo ""
-    fi
-
-    if command -v docker &>/dev/null; then
-        print_info "Docker:"
-        docker --version
-        echo ""
-    fi
-
-    if sudo test -s "$TARGET_USER_HOME/.nvm/nvm.sh"; then
-        print_info "Node.js & NPM (via NVM):"
-        sudo -u "$TARGET_USER" bash -c "$nvm_cmd; echo -n 'Node: '; node -v; echo -n 'NPM: '; npm -v"
-        echo ""
-    fi
-
-    if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
-        print_info "Homebrew:"
-        sudo -u "$TARGET_USER" bash -c "$brew_cmd; brew --version | head -n 1"
-        echo ""
-    fi
-
-    if command -v gemini &>/dev/null; then
-        print_info "Google Gemini CLI:"
-        echo "Installed at $(command -v gemini)"
-        echo ""
-    fi
-
-    if command -v nvidia-smi &>/dev/null; then
-        print_info "NVIDIA GPU Driver:"
-        nvidia-smi --query-gpu=driver_version,name --format=csv,noheader || nvidia-smi
-        nvidia-smi -q | grep -i "license" || true # display-only: may not match
-        echo ""
-    fi
-
-    if command -v btop &>/dev/null; then
-        print_info "btop (System Monitor):"
-        btop --version | head -n 1
-        echo ""
-    fi
-
-    if command -v nvtop &>/dev/null; then
-        print_info "nvtop (GPU Monitor):"
-        nvtop --version
-        echo ""
-    fi
-
-    if command -v gcc &>/dev/null; then
-        print_info "gcc Compiler:"
-        gcc --version | head -n 1
-        echo ""
-    fi
-
-    if command -v nvcc &>/dev/null; then
-        print_info "CUDA:"
-        nvcc --version
-        echo ""
-    fi
-
-    if ensure_nvidia_ctk_for_current_shell >/dev/null 2>&1; then
-        print_info "NVIDIA Container Toolkit:"
-        nvidia-ctk --version
-        echo ""
-    fi
-
-    if has_cudnn_available; then
-        print_info "cuDNN Library:"
-        dpkg -l | grep -E 'cudnn|libcudnn'
-        echo ""
-    fi
-
-    if command -v ollama &>/dev/null; then
-        print_info "Ollama:"
-        ollama --version
-        echo ""
-    fi
-
-    if command -v llama-server &>/dev/null; then
-        print_info "llama.cpp:"
-        echo "llama-server installed at $(command -v llama-server)"
-        echo ""
-        echo -e "  \e[1;36m-> Service commands:\e[0m"
-        echo "     sudo systemctl start   llama-server"
-        echo "     sudo systemctl stop    llama-server"
-        echo "     sudo systemctl restart llama-server"
-        echo "     sudo systemctl status  llama-server"
-        echo "     sudo journalctl -u llama-server -f   # follow live logs"
-        if systemctl is-active --quiet llama-server 2>/dev/null; then
-            echo ""
-            echo -e "  \e[1;36m-> To test your live API server from the terminal, run:\e[0m"
-            cat <<'EOF'
-     curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
-       -H "Content-Type: application/json" \
-       -H "Authorization: Bearer sk-llamacpp" \
-       -d '{
-         "messages": [
-           {"role": "system", "content": "You are a helpful coding assistant."},
-           {"role": "user", "content": "Write a quick haiku about the Linux command line."}
-         ],
-         "temperature": 0.7,
-         "max_tokens": 150
-       }' | jq -r '.choices[0].message.content'
-EOF
-        fi
-        echo ""
-    fi
-
-    if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then
-        print_info "Open-WebUI (Docker):"
-        local webui_status
-        webui_status=$(sudo docker inspect -f '{{.State.Status}}' open-webui)
-        echo "Status: $webui_status"
-        if command -v llama-server &>/dev/null; then
-            echo -e "  \e[1;36m-> How to connect Open-WebUI to llama.cpp:\e[0m"
-            echo "     1. Open WebUI in your browser (e.g., http://localhost:8081)"
-            echo "     2. Go to Profile (bottom left) -> Settings -> Connections"
-            echo "     3. Under 'OpenAI API', verify the URL is 'http://127.0.0.1:8080/v1' and Key is 'sk-llamacpp'"
-            echo "     4. Click the 'Verify Connection' icon. Your model should automatically load!"
-        fi
-        echo ""
-    fi
-
-    if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qi 'librechat'; then
-        print_info "LibreChat (Docker):"
-        local lc_status
-        lc_status=$(sudo docker inspect -f '{{.State.Status}}' LibreChat-api 2>/dev/null || echo "Running")
-        echo "Status: $lc_status"
-
-        local display_port="$LIBRECHAT_PORT"
-        if sudo test -f "$TARGET_USER_HOME/LibreChat/.env"; then
-            local real_port
-            real_port=$(sudo grep "^PORT=" "$TARGET_USER_HOME/LibreChat/.env" | cut -d'=' -f2 | tr -d '\r')
-            if [[ -n "$real_port" ]]; then display_port="$real_port"; fi
-        fi
-
-        echo -e "  \e[1;36m-> How to access LibreChat:\e[0m"
-        echo "     1. Open LibreChat in your browser (e.g., http://localhost:$display_port)"
-        echo "     2. Click 'Register' to create your admin account."
-        echo ""
-    fi
-
-    local oc_status_bin
-    oc_status_bin=$(sudo -u "$TARGET_USER" bash -c \
-        "export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"; command -v openclaw 2>/dev/null || true" 2>/dev/null || true)
-    if [[ -n "$oc_status_bin" ]] || sudo test -f "$TARGET_USER_HOME/.local/bin/openclaw"; then
-        print_info "OpenClaw:"
-        sudo -u "$TARGET_USER" bash -c \
-            "export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"; openclaw --version 2>/dev/null || echo 'Installed'"
-        echo ""
-    fi
-
-    print_info "System Hostname Resolution:"
-    local current_hostname
-    current_hostname=$(hostname)
-    if hostname -i &>/dev/null; then
-        print_success "Hostname '$current_hostname' resolves correctly ($(hostname -i | awk '{print $1}' | head -n 1))."
-    else
-        echo -e "\e[1;31m⚠️  WARNING: Hostname '$current_hostname' does not resolve.\e[0m"
-        echo "   Please add '127.0.1.1 $current_hostname' to your /etc/hosts file to prevent network and sudo delays."
-    fi
-    echo ""
-
-    if [[ -z "$unique_actions" ]]; then
-        return
-    fi
-
-    print_header "Next Steps & Important Information"
-
-    local shell_changed=0
-    if [[ "$unique_actions" == *"zsh"* ]]; then shell_changed=1; fi
-
-    local path_changed=0
-    if [[ "$unique_actions" == *"nvm"* || "$unique_actions" == *"brew"* || "$unique_actions" == *"cuda"* || "$unique_actions" == *"openclaw"* ]]; then path_changed=1; fi
-
-    if [[ "$unique_actions" == *"docker"* ]]; then
-        print_info "To use Docker without 'sudo' IMMEDIATELY in this terminal, run: newgrp docker"
-        print_info "Otherwise, you must LOG OUT and LOG BACK IN to apply the group change globally."
-        print_info "Then, test your installation with: docker run hello-world"
-        echo "" # Newline for spacing
-    fi
-
-    if [[ $shell_changed -eq 1 ]]; then
-        echo -e "\e[1;33mYour default shell has been changed to Zsh.\e[0m"
-        echo -e "To start using Zsh and activate all newly installed commands (like nvm, node, gemini), you must either:"
-        echo -e "  1. \e[1;32mOpen a NEW terminal window.\e[0m (Recommended)"
-        echo -e "  2. OR, if you are logged in as '$TARGET_USER', paste the following command into your current terminal:"
-        echo "source $TARGET_USER_HOME/.zshrc"
-        echo "" # Newline for spacing
-    elif [[ $path_changed -eq 1 ]]; then
-        # Determine the correct rc file based on the user's default shell
-        local rc_file=""
-        if sudo test -f "$TARGET_USER_HOME/.zshrc"; then
-            rc_file="$TARGET_USER_HOME/.zshrc"
-        elif sudo test -f "$TARGET_USER_HOME/.bashrc"; then
-            rc_file="$TARGET_USER_HOME/.bashrc"
-        fi
-        echo -e "\e[1;33mTo activate newly installed commands for '$TARGET_USER' (like nvm, node, gemini), they must either:\e[0m"
-        echo -e "  1. \e[1;32mOpen a NEW terminal window.\e[0m"
-        if [[ -n "$rc_file" ]]; then
-            echo -e "  2. OR, run the following command in your CURRENT terminal:"
-            echo "source ${rc_file}"
-        fi
-        echo "" # Newline for spacing
-    fi
-
-    if [[ "$unique_actions" == *"reboot"* ]]; then
-        print_info "A system reboot is highly recommended to ensure all NVIDIA drivers are loaded correctly."
-    fi
-
-    # Save clean summary to file at the end of every install run
-    save_ai_settings_file
-}
-
-# Write a clean, plain-text AI-settings summary to ~/AI-settings.txt
-# Called from print_final_summary (after install) and the 's' goal-menu key.
-save_ai_settings_file() {
-    local out_file="$HOME/AI-settings.txt"
-    local _lan_ip
-    _lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    local _nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
-    local _brew_cmd="[ -f /home/linuxbrew/.linuxbrew/bin/brew ] && eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""
-    {
-        echo "===== Installed Components & Verification ====="
-        echo "Generated: $(date)"
-        echo "Host:      $(hostname)  (${_lan_ip:-<ip>})"
-        echo ""
-
-        # --- Installed options ---
-        if [[ ${#MASTER_OPTIONS[@]} -gt 0 ]]; then
-            echo "Installed Options:"
-            local _found_opt=0
-            for _i in "${!MASTER_OPTIONS[@]}"; do
-                if [[ ${MASTER_INSTALLED_STATE[$_i]:-0} -eq 1 || ${MASTER_SELECTIONS[$_i]:-0} -eq 1 ]]; then
-                    echo "  - ${MASTER_OPTIONS[$_i]}"
-                    _found_opt=1
-                fi
-            done
-            [[ $_found_opt -eq 0 ]] && echo "  (none recorded)"
-            echo ""
-        fi
-
-        if [[ ${#INSTALLED_COMPONENTS[@]} -gt 0 ]]; then
-            echo "Newly Installed Components:"
-            printf '  - %s\n' "${INSTALLED_COMPONENTS[@]}"
-            echo ""
-        fi
-
-        if [[ ${#REPAIRED_COMPONENTS[@]} -gt 0 ]]; then
-            echo "Repaired Components:"
-            printf '  - %s\n' "${REPAIRED_COMPONENTS[@]}"
-            echo ""
-        fi
-
-        if [[ ${#FAILED_COMPONENTS[@]} -gt 0 ]]; then
-            echo "Failed Components:"
-            printf '  - %s\n' "${FAILED_COMPONENTS[@]}"
-            echo ""
-        fi
-
-        # --- Hardware ---
+    # File-only: Hardware section
+    if [[ $is_file -eq 1 ]]; then
         echo "Hardware:"
         echo "  RAM:  ${SYSTEM_RAM_GB:-?} GB"
         echo "  VRAM: ${GPU_VRAM_GB:-?} GB"
         echo "  GPU:  ${GPU_STATUS:-unknown}"
         echo ""
+    fi
 
-        # --- Per-component software sections (mirrors print_final_summary) ---
-        if sudo test -d "$TARGET_USER_HOME/.oh-my-zsh" && command -v zsh &>/dev/null; then
-            echo "Zsh / Oh My Zsh:"
-            zsh --version 2>/dev/null || echo "Installed"
-            echo ""
-        fi
+    # ── Per-component software sections ──────────────────────────────
+    if sudo test -d "$TARGET_USER_HOME/.oh-my-zsh" && command -v zsh &>/dev/null; then
+        _item "Zsh / Oh My Zsh:"
+        zsh --version 2>/dev/null || echo "Installed"
+        echo ""
+    fi
 
-        if command -v python3 &>/dev/null; then
-            echo "Python:"
-            python3 --version
-            echo ""
-        fi
+    if command -v python3 &>/dev/null; then
+        _item "Python:"
+        python3 --version
+        echo ""
+    fi
 
-        if command -v docker &>/dev/null; then
-            echo "Docker:"
-            docker --version
-            echo ""
-        fi
+    if command -v docker &>/dev/null; then
+        _item "Docker:"
+        docker --version
+        echo ""
+    fi
 
-        if sudo test -s "$TARGET_USER_HOME/.nvm/nvm.sh"; then
-            echo "Node.js & NPM (via NVM):"
-            sudo -u "$TARGET_USER" bash -c "$_nvm_cmd; echo -n 'Node: '; node -v; echo -n 'NPM:  '; npm -v" 2>/dev/null ||
-                echo "  (run as $TARGET_USER with NVM loaded)"
-            echo ""
-        fi
+    if sudo test -s "$TARGET_USER_HOME/.nvm/nvm.sh"; then
+        _item "Node.js & NPM (via NVM):"
+        sudo -u "$TARGET_USER" bash -c "$nvm_cmd; echo -n 'Node: '; node -v; echo -n 'NPM:  '; npm -v" 2>/dev/null \
+            || echo "  (run as $TARGET_USER with NVM loaded)"
+        echo ""
+    fi
 
-        if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
-            echo "Homebrew:"
-            sudo -u "$TARGET_USER" bash -c "$_brew_cmd; brew --version | head -n 1" 2>/dev/null ||
-                echo "  Installed (source $TARGET_USER_HOME/.zshrc to activate)"
-            echo ""
-        fi
+    if [ -f "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+        _item "Homebrew:"
+        sudo -u "$TARGET_USER" bash -c "$brew_cmd; brew --version | head -n 1" 2>/dev/null \
+            || echo "  Installed (source $TARGET_USER_HOME/.zshrc to activate)"
+        echo ""
+    fi
 
-        if command -v gemini &>/dev/null; then
-            echo "Google Gemini CLI:"
-            echo "Installed at $(command -v gemini)"
-            echo ""
-        fi
+    if command -v gemini &>/dev/null; then
+        _item "Google Gemini CLI:"
+        echo "Installed at $(command -v gemini)"
+        echo ""
+    fi
 
-        if command -v nvidia-smi &>/dev/null; then
-            echo "NVIDIA GPU Driver:"
-            nvidia-smi --query-gpu=driver_version,name --format=csv,noheader 2>/dev/null || nvidia-smi
-            nvidia-smi -q 2>/dev/null | grep -i "license" || true
-            echo ""
-        fi
+    if command -v nvidia-smi &>/dev/null; then
+        _item "NVIDIA GPU Driver:"
+        nvidia-smi --query-gpu=driver_version,name --format=csv,noheader 2>/dev/null || nvidia-smi
+        nvidia-smi -q 2>/dev/null | grep -i "license" || true
+        echo ""
+    fi
 
-        if command -v btop &>/dev/null; then
-            echo "btop (System Monitor):"
-            btop --version | head -n 1
-            echo ""
-        fi
+    if command -v btop &>/dev/null; then
+        _item "btop (System Monitor):"
+        btop --version | head -n 1
+        echo ""
+    fi
 
-        if command -v nvtop &>/dev/null; then
-            echo "nvtop (GPU Monitor):"
-            nvtop --version
-            echo ""
-        fi
+    if command -v nvtop &>/dev/null; then
+        _item "nvtop (GPU Monitor):"
+        nvtop --version
+        echo ""
+    fi
 
-        if command -v gcc &>/dev/null; then
-            echo "gcc Compiler:"
-            gcc --version | head -n 1
-            echo ""
-        fi
+    if command -v gcc &>/dev/null; then
+        _item "gcc Compiler:"
+        gcc --version | head -n 1
+        echo ""
+    fi
 
-        if command -v nvcc &>/dev/null; then
-            echo "CUDA:"
-            nvcc --version
-            echo ""
-        fi
+    if command -v nvcc &>/dev/null; then
+        _item "CUDA:"
+        nvcc --version
+        echo ""
+    fi
 
-        if ensure_nvidia_ctk_for_current_shell >/dev/null 2>&1; then
-            echo "NVIDIA Container Toolkit:"
-            nvidia-ctk --version 2>/dev/null || echo "Installed"
-            echo ""
-        fi
+    if ensure_nvidia_ctk_for_current_shell >/dev/null 2>&1; then
+        _item "NVIDIA Container Toolkit:"
+        nvidia-ctk --version 2>/dev/null || echo "Installed"
+        echo ""
+    fi
 
-        if has_cudnn_available; then
-            echo "cuDNN Library:"
-            dpkg -l 2>/dev/null | grep -E 'cudnn|libcudnn' || true
-            echo ""
-        fi
+    if has_cudnn_available; then
+        _item "cuDNN Library:"
+        dpkg -l 2>/dev/null | grep -E 'cudnn|libcudnn' || true
+        echo ""
+    fi
 
-        if command -v ollama &>/dev/null; then
-            echo "Ollama:"
-            ollama --version 2>/dev/null || echo "Installed"
+    if command -v ollama &>/dev/null; then
+        _item "Ollama:"
+        ollama --version 2>/dev/null || echo "Installed"
+        if [[ $is_file -eq 1 ]]; then
             echo "API URL: http://127.0.0.1:11434"
             echo "Commands:"
             echo "  sudo systemctl start ollama"
             echo "  sudo systemctl stop  ollama"
-            echo ""
         fi
+        echo ""
+    fi
 
-        if command -v llama-server &>/dev/null; then
-            echo "llama.cpp:"
-            echo "llama-server installed at $(command -v llama-server)"
-            echo ""
-            echo "  -> Service commands:"
-            echo "     sudo systemctl start   llama-server"
-            echo "     sudo systemctl stop    llama-server"
-            echo "     sudo systemctl restart llama-server"
-            echo "     sudo systemctl status  llama-server"
-            echo "     sudo journalctl -u llama-server -f   # follow live logs"
-            if systemctl is-active --quiet llama-server 2>/dev/null; then
-                local _exec_line _llama_args _model_path _model_name _ctx_val _ctk_val _ngl_val
-                _exec_line=$(sudo grep -m1 '^ExecStart=' /etc/systemd/system/llama-server.service 2>/dev/null || true)
-                _llama_args=$(echo "$_exec_line" | grep -oE 'llama-server.*' | head -1 || true)
-                _model_path=$(echo "$_llama_args" | grep -oE -- '--model [^[:space:]]+' | awk '{print $2}' || true)
-                [[ -z "$_model_path" ]] && _model_path=$(echo "$_llama_args" | grep -oE -- '--hf-file [^[:space:]]+' | awk '{print $2}' || true)
-                [[ -n "$_model_path" ]] && _model_name=$(basename "$_model_path" 2>/dev/null || true)
-                _ctx_val=$(echo "$_llama_args" | grep -oE -- '-c [0-9]+' | awk '{print $2}' || true)
-                _ctk_val=$(echo "$_llama_args" | grep -oE -- '-ctk [^[:space:]]+' | awk '{print $2}' || true)
-                _ngl_val=$(echo "$_llama_args" | grep -oE -- '-ngl [0-9]+' | awk '{print $2}' || true)
+    # ── llama.cpp ────────────────────────────────────────────────────
+    if command -v llama-server &>/dev/null; then
+        _item "llama.cpp:"
+        echo "llama-server installed at $(command -v llama-server)"
+        echo ""
+        _subheader "Service commands:"
+        echo "     sudo systemctl start   llama-server"
+        echo "     sudo systemctl stop    llama-server"
+        echo "     sudo systemctl restart llama-server"
+        echo "     sudo systemctl status  llama-server"
+        echo "     sudo journalctl -u llama-server -f   # follow live logs"
+
+        if systemctl is-active --quiet llama-server 2>/dev/null; then
+            # File-only: extract runtime params from the systemd unit
+            if [[ $is_file -eq 1 ]]; then
+                local exec_line llama_args model_path model_name ctx_val ctk_val ngl_val
+                exec_line=$(sudo grep -m1 '^ExecStart=' /etc/systemd/system/llama-server.service 2>/dev/null || true)
+                llama_args=$(echo "$exec_line" | grep -oE 'llama-server.*' | head -1 || true)
+                model_path=$(echo "$llama_args" | grep -oE -- '--model [^[:space:]]+' | awk '{print $2}' || true)
+                [[ -z "$model_path" ]] && model_path=$(echo "$llama_args" | grep -oE -- '--hf-file [^[:space:]]+' | awk '{print $2}' || true)
+                [[ -n "$model_path" ]] && model_name=$(basename "$model_path" 2>/dev/null || true)
+                ctx_val=$(echo "$llama_args" | grep -oE -- '-c [0-9]+' | awk '{print $2}' || true)
+                ctk_val=$(echo "$llama_args" | grep -oE -- '-ctk [^[:space:]]+' | awk '{print $2}' || true)
+                ngl_val=$(echo "$llama_args" | grep -oE -- '-ngl [0-9]+' | awk '{print $2}' || true)
                 echo ""
-                echo "  Running model: ${_model_name:-unknown}"
-                [[ -n "$_ctx_val" ]] && echo "  Context:       $_ctx_val tokens"
-                [[ -n "$_ctk_val" ]] && echo "  KV cache type: $_ctk_val"
-                [[ -n "$_ngl_val" ]] && echo "  GPU layers:    $_ngl_val"
+                echo "  Running model: ${model_name:-unknown}"
+                [[ -n "$ctx_val" ]] && echo "  Context:       $ctx_val tokens"
+                [[ -n "$ctk_val" ]] && echo "  KV cache type: $ctk_val"
+                [[ -n "$ngl_val" ]] && echo "  GPU layers:    $ngl_val"
                 echo "  API URL:       http://127.0.0.1:8080/v1"
                 echo "  API key:       sk-llamacpp"
-                echo ""
-                echo "  -> To test your live API server from the terminal, run:"
-                cat <<'CURLEOF'
+            fi
+
+            echo ""
+            _subheader "To test your live API server from the terminal, run:"
+            cat <<'CURLEOF'
      curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
        -H "Content-Type: application/json" \
        -H "Authorization: Bearer sk-llamacpp" \
@@ -4710,156 +4489,235 @@ save_ai_settings_file() {
          "max_tokens": 150
        }' | jq -r '.choices[0].message.content'
 CURLEOF
-            fi
-            echo ""
+        fi
+        echo ""
+    fi
+
+    # ── Open-WebUI ───────────────────────────────────────────────────
+    if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then
+        _item "Open-WebUI (Docker):"
+        local webui_status
+        webui_status=$(sudo docker inspect -f '{{.State.Status}}' open-webui 2>/dev/null || echo "unknown")
+        echo "Status: $webui_status"
+        if command -v llama-server &>/dev/null; then
+            _subheader "How to connect Open-WebUI to llama.cpp:"
+            echo "     1. Open WebUI in your browser (e.g., http://localhost:8081)"
+            echo "     2. Go to Profile (bottom left) -> Settings -> Connections"
+            echo "     3. Under 'OpenAI API', verify the URL is 'http://127.0.0.1:8080/v1' and Key is 'sk-llamacpp'"
+            echo "     4. Click the 'Verify Connection' icon. Your model should automatically load!"
+        fi
+        echo ""
+    fi
+
+    # ── LibreChat ────────────────────────────────────────────────────
+    if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qi 'librechat'; then
+        _item "LibreChat (Docker):"
+        local lc_status lc_port="${LIBRECHAT_PORT:-3080}"
+        lc_status=$(sudo docker inspect -f '{{.State.Status}}' LibreChat-api 2>/dev/null || echo "Running")
+        echo "Status: $lc_status"
+
+        if sudo test -f "$TARGET_USER_HOME/LibreChat/.env"; then
+            local real_port
+            real_port=$(sudo grep "^PORT=" "$TARGET_USER_HOME/LibreChat/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '\r')
+            [[ -n "$real_port" ]] && lc_port="$real_port"
         fi
 
-        if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then
-            echo "Open-WebUI (Docker):"
-            local _webui_status
-            _webui_status=$(sudo docker inspect -f '{{.State.Status}}' open-webui 2>/dev/null || echo "unknown")
-            echo "Status: $_webui_status"
-            if command -v llama-server &>/dev/null; then
-                echo "  -> How to connect Open-WebUI to llama.cpp:"
-                echo "     1. Open WebUI in your browser (e.g., http://localhost:8081)"
-                echo "     2. Go to Profile (bottom left) -> Settings -> Connections"
-                echo "     3. Under 'OpenAI API', verify URL is 'http://127.0.0.1:8080/v1' and Key is 'sk-llamacpp'"
-                echo "     4. Click the 'Verify Connection' icon. Your model should automatically load!"
-            fi
-            echo ""
-        fi
-
-        if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qi 'librechat'; then
-            echo "LibreChat (Docker):"
-            local _lc_status _lc_port="${LIBRECHAT_PORT:-3080}"
-            _lc_status=$(sudo docker inspect -f '{{.State.Status}}' LibreChat-api 2>/dev/null || echo "Running")
-            echo "Status: $_lc_status"
-            if sudo test -f "$TARGET_USER_HOME/LibreChat/.env"; then
-                local _rp
-                _rp=$(sudo grep "^PORT=" "$TARGET_USER_HOME/LibreChat/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '\r')
-                [[ -n "$_rp" ]] && _lc_port="$_rp"
-            fi
-            echo "  -> How to access LibreChat:"
-            echo "     URL: http://${_lan_ip:-localhost}:${_lc_port}"
+        _subheader "How to access LibreChat:"
+        if [[ $is_file -eq 1 ]]; then
+            echo "     URL: http://${lan_ip:-localhost}:${lc_port}"
             echo "     1. Open LibreChat in your browser"
             echo "     2. Click 'Register' to create your admin account."
             echo "  Commands:"
             echo "     cd $TARGET_USER_HOME/LibreChat && docker compose up -d    # start"
             echo "     cd $TARGET_USER_HOME/LibreChat && docker compose down      # stop"
-            echo ""
-        fi
-
-        # --- OpenClaw ---
-        local _oc_bin
-        _oc_bin=$(sudo -u "$TARGET_USER" bash -c \
-            "$_nvm_cmd; command -v openclaw 2>/dev/null || true" 2>/dev/null || true)
-        if [[ -n "$_oc_bin" ]] || sudo test -f "$TARGET_USER_HOME/.local/bin/openclaw"; then
-            echo "OpenClaw:"
-            sudo -u "$TARGET_USER" bash -c \
-                "$_nvm_cmd; openclaw --version 2>/dev/null || echo 'Installed'" 2>/dev/null || echo "Installed"
-
-            if sudo test -f "$TARGET_USER_HOME/.openclaw/openclaw.json"; then
-                local _oc_port _oc_bind
-                _oc_port=$(sudo jq -r '.gateway.port // 18789' "$TARGET_USER_HOME/.openclaw/openclaw.json" 2>/dev/null || echo "18789")
-                _oc_bind=$(sudo jq -r '.gateway.bind // "loopback"' "$TARGET_USER_HOME/.openclaw/openclaw.json" 2>/dev/null || echo "loopback")
-                echo "  Port:   $_oc_port"
-                echo "  Bind:   $_oc_bind"
-                echo "  Config: $TARGET_USER_HOME/.openclaw/openclaw.json"
-                echo ""
-                echo "  -> Service commands (as user $TARGET_USER):"
-                echo "     systemctl --user start  openclaw-gateway"
-                echo "     systemctl --user stop   openclaw-gateway"
-                echo "     systemctl --user status openclaw-gateway"
-                echo ""
-                echo "  -> Control UI access:"
-                echo "     Direct (LAN): http://${_lan_ip:-<server-ip>}:${_oc_port}/"
-                echo ""
-                echo "     SSH tunnel (from a remote machine):"
-                echo "     ssh -L ${_oc_port}:localhost:${_oc_port} [admin-user]@${_lan_ip:-<server-ip>}"
-                echo "     Then open:  http://localhost:${_oc_port}/"
-                echo ""
-                # Try to extract the current session token from today's log
-                local _oc_log _oc_token
-                _oc_log="/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log"
-                _oc_token=""
-                if sudo test -f "$_oc_log" 2>/dev/null; then
-                    _oc_token=$(sudo grep -oE '#token=[a-f0-9]+' "$_oc_log" 2>/dev/null |
-                        tail -1 | sed 's/#token=//' || true)
-                fi
-                if [[ -n "$_oc_token" ]]; then
-                    echo "     Current session token URL:"
-                    echo "     http://localhost:${_oc_port}/#token=${_oc_token}"
-                    echo "     (Token changes on each service restart)"
-                else
-                    echo "     Token: run the command below to get the current token:"
-                fi
-                echo "     sudo -u $TARGET_USER bash -c \\"
-                echo "       'XDG_RUNTIME_DIR=/run/user/\$(id -u $TARGET_USER) openclaw status' | grep -i token"
-            fi
-            echo ""
-        fi
-
-        # --- Hostname resolution ---
-        echo "System Hostname Resolution:"
-        local _hn
-        _hn=$(hostname)
-        if hostname -i &>/dev/null; then
-            echo "  Hostname '$_hn' resolves correctly ($(hostname -i | awk '{print $1}' | head -n 1))."
         else
-            echo "  WARNING: Hostname '$_hn' does not resolve."
-            echo "  Add '127.0.1.1 $_hn' to /etc/hosts to prevent network and sudo delays."
+            echo "     1. Open LibreChat in your browser (e.g., http://localhost:$lc_port)"
+            echo "     2. Click 'Register' to create your admin account."
         fi
         echo ""
+    fi
 
-        if [[ -n "${TARGET_USER:-}" ]]; then
-            echo "Target user: $TARGET_USER  ($TARGET_USER_HOME)"
-            echo ""
-        fi
+    # ── OpenClaw ─────────────────────────────────────────────────────
+    local oc_bin
+    oc_bin=$(sudo -u "$TARGET_USER" bash -c \
+        "$nvm_cmd; command -v openclaw 2>/dev/null || true" 2>/dev/null || true)
+    if [[ -n "$oc_bin" ]] || sudo test -f "$TARGET_USER_HOME/.local/bin/openclaw"; then
+        _item "OpenClaw:"
+        sudo -u "$TARGET_USER" bash -c \
+            "$nvm_cmd; openclaw --version 2>/dev/null || echo 'Installed'" 2>/dev/null || echo "Installed"
 
-        # --- Next steps (mirrors print_final_summary post-install advice) ---
-        local _ua=""
-        if [[ ${#POST_INSTALL_ACTIONS[@]} -gt 0 ]]; then
-            _ua=$(printf '%s\n' "${POST_INSTALL_ACTIONS[@]}" | sort -u | tr '\n' ' ')
-        fi
-        if [[ -n "$_ua" ]]; then
-            echo "===== Next Steps & Important Information ====="
+        # File-only: detailed port / bind / token URL
+        if [[ $is_file -eq 1 ]] && sudo test -f "$TARGET_USER_HOME/.openclaw/openclaw.json"; then
+            local oc_port oc_bind
+            oc_port=$(sudo jq -r '.gateway.port // 18789' "$TARGET_USER_HOME/.openclaw/openclaw.json" 2>/dev/null || echo "18789")
+            oc_bind=$(sudo jq -r '.gateway.bind // "loopback"' "$TARGET_USER_HOME/.openclaw/openclaw.json" 2>/dev/null || echo "loopback")
+            echo "  Port:   $oc_port"
+            echo "  Bind:   $oc_bind"
+            echo "  Config: $TARGET_USER_HOME/.openclaw/openclaw.json"
             echo ""
-            if [[ "$_ua" == *"docker"* ]]; then
-                echo "Docker group change:"
-                echo "  To use Docker without 'sudo' immediately: newgrp docker"
-                echo "  Or log out and back in to apply the group change globally."
-                echo "  Then test: docker run hello-world"
-                echo ""
+            echo "  -> Service commands (as user $TARGET_USER):"
+            echo "     systemctl --user start  openclaw-gateway"
+            echo "     systemctl --user stop   openclaw-gateway"
+            echo "     systemctl --user status openclaw-gateway"
+            echo ""
+            echo "  -> Control UI access:"
+            echo "     Direct (LAN): http://${lan_ip:-<server-ip>}:${oc_port}/"
+            echo ""
+            echo "     SSH tunnel (from a remote machine):"
+            echo "     ssh -L ${oc_port}:localhost:${oc_port} [admin-user]@${lan_ip:-<server-ip>}"
+            echo "     Then open:  http://localhost:${oc_port}/"
+            echo ""
+            # Try to extract the current session token from today's log
+            local oc_log oc_token
+            oc_log="/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log"
+            oc_token=""
+            if sudo test -f "$oc_log" 2>/dev/null; then
+                oc_token=$(sudo grep -oE '#token=[a-f0-9]+' "$oc_log" 2>/dev/null |
+                    tail -1 | sed 's/#token=//' || true)
             fi
-            if [[ "$_ua" == *"zsh"* ]]; then
-                echo "Shell change:"
-                echo "  Your default shell was changed to Zsh."
-                echo "  Open a new terminal, or run: source $TARGET_USER_HOME/.zshrc"
-                echo ""
-            elif [[ "$_ua" == *"nvm"* || "$_ua" == *"brew"* || "$_ua" == *"openclaw"* ]]; then
-                local _rc=""
-                sudo test -f "$TARGET_USER_HOME/.zshrc" && _rc="$TARGET_USER_HOME/.zshrc"
-                sudo test -f "$TARGET_USER_HOME/.bashrc" && [[ -z "$_rc" ]] && _rc="$TARGET_USER_HOME/.bashrc"
-                echo "To activate newly installed commands for '$TARGET_USER' (like nvm, node, gemini), they must either:"
-                echo "  1. Open a NEW terminal window."
-                [[ -n "$_rc" ]] && echo "  2. OR, run the following command in your CURRENT terminal:" &&
-                    echo "source ${_rc}"
-                echo ""
+            if [[ -n "$oc_token" ]]; then
+                echo "     Current session token URL:"
+                echo "     http://localhost:${oc_port}/#token=${oc_token}"
+                echo "     (Token changes on each service restart)"
+            else
+                echo "     Token: run the command below to get the current token:"
             fi
-            if [[ "$_ua" == *"ufw"* ]]; then
-                echo "IMPORTANT: Firewall rules have been configured, but UFW is NOT enabled by default."
-                echo "The following UFW rules have been prepared:"
-                sudo ufw status 2>/dev/null | grep -E 'ALLOW|DENY' | sed 's/^/  - /' || true
-                echo "To enable UFW: sudo ufw enable"
-                echo ""
+            echo "     sudo -u $TARGET_USER bash -c \\"
+            echo "       'XDG_RUNTIME_DIR=/run/user/\$(id -u $TARGET_USER) openclaw status' | grep -i token"
+        fi
+        echo ""
+    fi
+
+    # ── Hostname resolution ──────────────────────────────────────────
+    _item "System Hostname Resolution:"
+    local current_hostname
+    current_hostname=$(hostname)
+    if hostname -i &>/dev/null; then
+        if [[ $is_file -eq 1 ]]; then
+            echo "  Hostname '$current_hostname' resolves correctly ($(hostname -i | awk '{print $1}' | head -n 1))."
+        else
+            print_success "Hostname '$current_hostname' resolves correctly ($(hostname -i | awk '{print $1}' | head -n 1))."
+        fi
+    else
+        if [[ $is_file -eq 1 ]]; then
+            echo "  WARNING: Hostname '$current_hostname' does not resolve."
+            echo "  Add '127.0.1.1 $current_hostname' to /etc/hosts to prevent network and sudo delays."
+        else
+            echo -e "\e[1;31m⚠️  WARNING: Hostname '$current_hostname' does not resolve.\e[0m"
+            echo "   Please add '127.0.1.1 $current_hostname' to your /etc/hosts file to prevent network and sudo delays."
+        fi
+    fi
+    echo ""
+
+    # File-only: target-user footer
+    if [[ $is_file -eq 1 ]] && [[ -n "${TARGET_USER:-}" ]]; then
+        echo "Target user: $TARGET_USER  ($TARGET_USER_HOME)"
+        echo ""
+    fi
+
+    # If no post-install actions recorded, skip Next Steps entirely
+    [[ -z "$unique_actions" ]] && return
+
+    # ── Next Steps & Important Information ───────────────────────────
+    _banner "Next Steps & Important Information"
+    [[ $is_file -eq 1 ]] && echo ""
+
+    local shell_changed=0 path_changed=0
+    [[ "$unique_actions" == *"zsh"* ]] && shell_changed=1
+    if [[ "$unique_actions" == *"nvm"* || "$unique_actions" == *"brew"* \
+         || "$unique_actions" == *"cuda"* || "$unique_actions" == *"openclaw"* ]]; then
+        path_changed=1
+    fi
+
+    if [[ "$unique_actions" == *"docker"* ]]; then
+        if [[ $is_file -eq 1 ]]; then
+            echo "Docker group change:"
+            echo "  To use Docker without 'sudo' immediately: newgrp docker"
+            echo "  Or log out and back in to apply the group change globally."
+            echo "  Then test: docker run hello-world"
+        else
+            print_info "To use Docker without 'sudo' IMMEDIATELY in this terminal, run: newgrp docker"
+            print_info "Otherwise, you must LOG OUT and LOG BACK IN to apply the group change globally."
+            print_info "Then, test your installation with: docker run hello-world"
+        fi
+        echo ""
+    fi
+
+    if [[ $shell_changed -eq 1 ]]; then
+        if [[ $is_file -eq 1 ]]; then
+            echo "Shell change:"
+            echo "  Your default shell was changed to Zsh."
+            echo "  Open a new terminal, or run: source $TARGET_USER_HOME/.zshrc"
+        else
+            echo -e "\e[1;33mYour default shell has been changed to Zsh.\e[0m"
+            echo -e "To start using Zsh and activate all newly installed commands (like nvm, node, gemini), you must either:"
+            echo -e "  1. \e[1;32mOpen a NEW terminal window.\e[0m (Recommended)"
+            echo -e "  2. OR, if you are logged in as '$TARGET_USER', paste the following command into your current terminal:"
+            echo "source $TARGET_USER_HOME/.zshrc"
+        fi
+        echo ""
+    elif [[ $path_changed -eq 1 ]]; then
+        local rc_file=""
+        if sudo test -f "$TARGET_USER_HOME/.zshrc"; then
+            rc_file="$TARGET_USER_HOME/.zshrc"
+        elif sudo test -f "$TARGET_USER_HOME/.bashrc"; then
+            rc_file="$TARGET_USER_HOME/.bashrc"
+        fi
+        if [[ $is_file -eq 1 ]]; then
+            echo "To activate newly installed commands for '$TARGET_USER' (like nvm, node, gemini), they must either:"
+            echo "  1. Open a NEW terminal window."
+            if [[ -n "$rc_file" ]]; then
+                echo "  2. OR, run the following command in your CURRENT terminal:"
+                echo "source ${rc_file}"
             fi
-            if [[ "$_ua" == *"reboot"* ]]; then
-                echo "Reboot recommended:"
-                echo "  A system reboot is recommended to ensure all NVIDIA drivers are loaded correctly."
-                echo ""
+        else
+            echo -e "\e[1;33mTo activate newly installed commands for '$TARGET_USER' (like nvm, node, gemini), they must either:\e[0m"
+            echo -e "  1. \e[1;32mOpen a NEW terminal window.\e[0m"
+            if [[ -n "$rc_file" ]]; then
+                echo -e "  2. OR, run the following command in your CURRENT terminal:"
+                echo "source ${rc_file}"
             fi
         fi
-    } >"$out_file"
+        echo ""
+    fi
+
+    # File-only: UFW status
+    if [[ $is_file -eq 1 && "$unique_actions" == *"ufw"* ]]; then
+        echo "IMPORTANT: Firewall rules have been configured, but UFW is NOT enabled by default."
+        echo "The following UFW rules have been prepared:"
+        sudo ufw status 2>/dev/null | grep -E 'ALLOW|DENY' | sed 's/^/  - /' || true
+        echo "To enable UFW: sudo ufw enable"
+        echo ""
+    fi
+
+    if [[ "$unique_actions" == *"reboot"* ]]; then
+        if [[ $is_file -eq 1 ]]; then
+            echo "Reboot recommended:"
+            echo "  A system reboot is recommended to ensure all NVIDIA drivers are loaded correctly."
+            echo ""
+        else
+            print_info "A system reboot is highly recommended to ensure all NVIDIA drivers are loaded correctly."
+        fi
+    fi
+}
+
+print_final_summary() {
+    # Ensure newly installed binaries are in the script's PATH for verification
+    [ -d "/usr/local/cuda/bin" ] && export PATH="/usr/local/cuda/bin:$PATH"
+    _render_summary "terminal"
+    # Save on-disk summary only when something was installed/repaired (matches
+    # the pre-refactor behaviour — the old print_final_summary returned early
+    # before reaching save_ai_settings_file when POST_INSTALL_ACTIONS was empty).
+    if [[ ${#POST_INSTALL_ACTIONS[@]} -gt 0 ]]; then
+        save_ai_settings_file
+    fi
+}
+
+# Write a clean, plain-text AI-settings summary to ~/AI-settings.txt
+# Called from print_final_summary (after install) and the 's' goal-menu key.
+save_ai_settings_file() {
+    local out_file="$HOME/AI-settings.txt"
+    _render_summary "file" >"$out_file"
     print_success "Settings saved → $out_file"
 }
 
