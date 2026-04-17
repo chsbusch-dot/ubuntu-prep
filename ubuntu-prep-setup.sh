@@ -1550,11 +1550,11 @@ install_cudnn() {
     print_info "Installing cuDNN..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y zlib1g
 
+    # ── Detect CUDA major version ─────────────────────────────────────────────
     print_info "Auto-detecting CUDA major version..."
     local cuda_major="12" # Default fallback
-
     local detected_nvcc_path=""
-    detected_nvcc_path=$(get_cuda_nvcc_path || true) # may not exist yet
+    detected_nvcc_path=$(get_cuda_nvcc_path || true)
     if [[ -n "$detected_nvcc_path" ]]; then
         cuda_major=$("$detected_nvcc_path" --version | sed -n 's/^.*release \([0-9]\+\)\..*$/\1/p')
     elif dpkg -l | grep -q "cuda-toolkit-[0-9]"; then
@@ -1562,29 +1562,64 @@ install_cudnn() {
     elif command -v nvidia-smi &>/dev/null; then
         cuda_major=$(nvidia-smi | grep -i "CUDA Version" | sed -n 's/.*CUDA Version: \([0-9]\+\).*/\1/p')
     fi
-
     if [[ -z "$cuda_major" ]]; then cuda_major="12"; fi
-
     print_success "Auto-detected CUDA major version: $cuda_major"
-    sudo DEBIAN_FRONTEND=noninteractive apt-get -y install "cudnn9-cuda-${cuda_major}"
 
-    print_info "Auto-detecting cuDNN library path..."
-    sudo ldconfig # Ensure cache is updated after installation
+    # ── Install cuDNN local repo .deb ─────────────────────────────────────────
+    # cuDNN requires its own separate local apt repository — it is NOT included
+    # in the standard CUDA toolkit repo. NVIDIA's official method:
+    #   1. Download the local repo .deb for the OS version
+    #   2. dpkg -i to register the repo
+    #   3. Copy the keyring
+    #   4. apt-get update + install the CUDA-versioned package
+    #
+    # Override CUDNN_LOCAL_DEB_URL in .env.secrets to pin a specific version.
+    local ubuntu_ver
+    ubuntu_ver=$(lsb_release -rs 2>/dev/null | tr -d '.')   # e.g. "2404"
+    local cudnn_ver="${CUDNN_VERSION:-9.21.0}"
+    local cudnn_deb_url="${CUDNN_LOCAL_DEB_URL:-https://developer.download.nvidia.com/compute/cudnn/${cudnn_ver}/local_installers/cudnn-local-repo-ubuntu${ubuntu_ver}-${cudnn_ver}_1.0-1_amd64.deb}"
+    local cudnn_deb_file="/tmp/cudnn-local-repo.deb"
+
+    print_info "Downloading cuDNN local repo installer (${cudnn_ver})..."
+    if ! curl_with_retry -fsSL -o "$cudnn_deb_file" "$cudnn_deb_url"; then
+        echo "❌ Failed to download cuDNN installer from: $cudnn_deb_url"
+        echo "   Set CUDNN_LOCAL_DEB_URL in ~/.env.secrets to override."
+        return 1
+    fi
+
+    print_info "Registering cuDNN local apt repository..."
+    sudo dpkg -i "$cudnn_deb_file"
+    # Copy the keyring installed by the .deb into the system keyring directory
+    sudo cp /var/cudnn-local-repo-ubuntu"${ubuntu_ver}"-"${cudnn_ver}"/cudnn-*-keyring.gpg \
+        /usr/share/keyrings/ 2>/dev/null || true
+    sudo apt-get update -qq
+    rm -f "$cudnn_deb_file"
+
+    # ── Install CUDA-versioned cuDNN package ──────────────────────────────────
+    # Try the detected CUDA version first; fall back to cuda-12 if unavailable.
+    local cudnn_pkg="cudnn9-cuda-${cuda_major}"
+    if ! apt-cache show "$cudnn_pkg" &>/dev/null; then
+        echo "⚠️  Package '$cudnn_pkg' not found — falling back to cudnn9-cuda-12"
+        cudnn_pkg="cudnn9-cuda-12"
+    fi
+    print_info "Installing ${cudnn_pkg}..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -y install "$cudnn_pkg"
+
+    # ── Export LD_LIBRARY_PATH system-wide ───────────────────────────────────
+    print_info "Detecting cuDNN library path..."
+    sudo ldconfig
     local cudnn_lib_path=""
-    cudnn_lib_path=$(get_cudnn_library_path || true) # may not be installed
+    cudnn_lib_path=$(get_cudnn_library_path || true)
 
     if [[ -n "$cudnn_lib_path" ]]; then
-        print_success "cuDNN library path found at: $cudnn_lib_path"
-
-        local cudnn_env_str="export LD_LIBRARY_PATH=\"$cudnn_lib_path:\$LD_LIBRARY_PATH\""
-        if sudo test -f "$TARGET_USER_HOME/.zshrc" && ! sudo grep -q "$cudnn_lib_path" "$TARGET_USER_HOME/.zshrc"; then
-            echo -e "\n# Add cuDNN to LD_LIBRARY_PATH\n${cudnn_env_str}" | sudo tee -a "$TARGET_USER_HOME/.zshrc" >/dev/null
-        fi
-        if sudo test -f "$TARGET_USER_HOME/.bashrc" && ! sudo grep -q "$cudnn_lib_path" "$TARGET_USER_HOME/.bashrc"; then
-            echo -e "\n# Add cuDNN to LD_LIBRARY_PATH\n${cudnn_env_str}" | sudo tee -a "$TARGET_USER_HOME/.bashrc" >/dev/null
-        fi
+        print_success "cuDNN library path: $cudnn_lib_path"
+        sudo tee /etc/profile.d/cudnn.sh >/dev/null <<CUDNNEOF
+# Added by ubuntu-prep-setup.sh — cuDNN system-wide LD_LIBRARY_PATH
+export LD_LIBRARY_PATH="${cudnn_lib_path}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+CUDNNEOF
+        sudo chmod 644 /etc/profile.d/cudnn.sh
     else
-        echo "⚠️ Could not auto-detect cuDNN library path for LD_LIBRARY_PATH export."
+        echo "⚠️ Could not detect cuDNN library path — LD_LIBRARY_PATH not updated."
     fi
 
     POST_INSTALL_ACTIONS+=("reboot")
