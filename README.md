@@ -170,19 +170,20 @@ Example:
 # export SYSTEM_TIMEZONE="America/Los_Angeles"
 ```
 
-## Feedback &Commercial Use
+## Feedback
+
 Let me know if you find this useful and if you encounter any bugs or issues.
 
-If you use this at work or to make money, please consider expensing a sponsor contribution by clicking the sponsor button above.
+I am working on a private V2.0 with support for:
 
-I am working on a provate V2.0 with support for:
-|Nvidia NGC Support| CLI Driver and Model download, requires Nvisia Enterprise License|
-|vLLM|Easy-to-use library for LLM inference and serving models|https://github.com/vllm-project/vllm|
-|Manifest|Smart LLM Model Router|https://github.com/mnfst/manifest|
-|Infisical|Secure, Local API Key Secrets Management|https://github.com/infisical/infisical|
+| Tool | Description |
+|---|---|
+| Nvidia NGC Support | CLI Driver and Model download, requires Nvidia Enterprise License |
+| vLLM | Easy-to-use library for LLM inference and serving models |
+| Manifest | Smart LLM Model Router |
+| Infisical | Secure, Local API Key Secrets Management |
 
-Let me know if you are intersted. 
-
+Let me know if you are interested.
 
 Let me know if I should add other packages.
 Here are some other packages thatI am considering:
@@ -309,7 +310,15 @@ The repository includes a comprehensive test suite in `test.sh` to validate the 
 
 ## License
 
-[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm--NC%201.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
+
+This project is dual-licensed:
+
+- **Free for personal and noncommercial use** under the [PolyForm Noncommercial 1.0.0](LICENSE) license. Hobby projects, home labs, education, research, and nonprofit use are all covered — go wild.
+
+- **Commercial use requires a one-time $10 license.** If you or your company use this at work, please purchase a commercial license. See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) for details, or click the **Sponsor** button above.
+
+If you fork or redistribute this project, please keep the copyright notice and link back to this repo.
 
 ##
-Last updated: 2026-04-17 — Full stack validated: CUDA 13 + cuDNN 9.21.0 + llama.cpp + OpenWebUI + LibreChat + OpenClaw on Ubuntu 24.04 with NVIDIA RTXA5000-24Q passthrough using NVIDIA Consumer Ubuntu Drivers, and on ESXi 8.0 VM with Ubuntu 24.04 with NVIDIA RTXA5000-24Q vGPU Drivers and licence token.
+Last updated: 2026-04-17 — Full stack validated: CUDA 13 + cuDNN 9.21.0 + llama.cpp + OpenWebUI + LibreChat + OpenClaw on Ubuntu 24.04 with NVIDIA RTXA5000 passthrough using NVIDIA Consumer Ubuntu Drivers, and on ESXi 8.0 VM with Ubuntu 24.04 with NVIDIA RTXA5000-24Q Enterprise vGPU Drivers and licence token.

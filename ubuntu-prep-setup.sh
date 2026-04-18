@@ -4814,6 +4814,10 @@ print_final_summary() {
     if [[ ${#POST_INSTALL_ACTIONS[@]} -gt 0 ]]; then
         save_ai_settings_file
     fi
+    echo ""
+    echo -e "\e[2m  Using this at work? Commercial use requires a one-time \$10 license."
+    echo -e "  → https://github.com/chsbusch-dot/Ubuntu-AI-Tools-Install\e[0m"
+    echo ""
 }
 
 # Write a clean, plain-text AI-settings summary to ~/AI-settings.txt
