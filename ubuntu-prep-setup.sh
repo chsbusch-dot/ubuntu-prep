@@ -1575,7 +1575,7 @@ install_cudnn() {
     #
     # Override CUDNN_LOCAL_DEB_URL in .env.secrets to pin a specific version.
     local ubuntu_ver
-    ubuntu_ver=$(lsb_release -rs 2>/dev/null | tr -d '.')   # e.g. "2404"
+    ubuntu_ver=$(lsb_release -rs 2>/dev/null | tr -d '.') # e.g. "2404"
     local cudnn_ver="${CUDNN_VERSION:-9.21.0}"
     local cudnn_deb_url="${CUDNN_LOCAL_DEB_URL:-https://developer.download.nvidia.com/compute/cudnn/${cudnn_ver}/local_installers/cudnn-local-repo-ubuntu${ubuntu_ver}-${cudnn_ver}_1.0-1_amd64.deb}"
     local cudnn_deb_file="/tmp/cudnn-local-repo.deb"
@@ -3905,6 +3905,56 @@ EOF
     local openclaw_config="$TARGET_USER_HOME/.openclaw/openclaw.json"
     if sudo test -f "$openclaw_config"; then
 
+        # ── Auto-configure provider if onboard didn't write one ───────────────
+        # 'openclaw onboard' run through 'su -c' loses TTY and silently skips
+        # the provider-selection wizard.  Detect this and write the config
+        # directly using the schema from a known-good onboard run.
+        if ! sudo jq -e '.models.providers | length > 0' "$openclaw_config" >/dev/null 2>&1; then
+            if [[ "$backend_target" == "llama" ]]; then
+                print_info "No provider in config — writing llama.cpp provider directly..."
+                local _prov_key="custom-127-0-0-1-8080"
+                local _prov_ctx="${LLAMA_CTX_SIZE:-65536}"
+                [[ "$_prov_ctx" -lt 16000 ]] && _prov_ctx=16000
+                local _prov_tmp
+                _prov_tmp=$(sudo mktemp)
+                sudo jq \
+                    --arg key "$_prov_key" \
+                    --argjson ctx "$_prov_ctx" \
+                    '. * {
+                        "models": {
+                            "mode": "merge",
+                            "providers": {
+                                ($key): {
+                                    "baseUrl": "http://127.0.0.1:8080/v1",
+                                    "api": "openai-completions",
+                                    "apiKey": "sk-llamacpp",
+                                    "models": [{
+                                        "id": "llama",
+                                        "name": "llama (Custom Provider)",
+                                        "contextWindow": $ctx,
+                                        "maxTokens": 4096,
+                                        "input": ["text"],
+                                        "cost": {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
+                                        "reasoning": false
+                                    }]
+                                }
+                            }
+                        },
+                        "agents": {
+                            "defaults": {
+                                "model": {"primary": ($key + "/llama")},
+                                "models": {($key + "/llama"): {"alias": "llama"}}
+                            }
+                        }
+                    }' "$openclaw_config" | sudo tee "$_prov_tmp" >/dev/null &&
+                    sudo mv "$_prov_tmp" "$openclaw_config" &&
+                    sudo chown "$TARGET_USER":"$TARGET_USER" "$openclaw_config"
+                print_success "llama.cpp provider written (${_prov_key}/llama, ctx: ${_prov_ctx})."
+            else
+                echo "⚠️  No provider configured and backend is not llama — run 'openclaw configure --section model' manually as $TARGET_USER."
+            fi
+        fi
+
         # ── Combined: Configure & Secure OpenClaw ────────────────────────────
         # Items 1-5 : security hardening
         # Items 6-9 : gateway/network settings
@@ -4020,7 +4070,7 @@ EOF
             oc_jq_filter="$oc_jq_filter | .gateway.auth.rateLimit = {\"maxAttempts\": 10, \"windowMs\": 60000, \"lockoutMs\": 300000}"
         fi
         oc_jq_filter="$oc_jq_filter | .agents.defaults.compaction.reserveTokensFloor = 20000"
-        oc_jq_filter="$oc_jq_filter | (.providers // {}) as \$p | if (\$p | keys | map(select(startswith(\"custom-127\"))) | length) > 0 then (.providers[(.providers | keys | map(select(startswith(\"custom-127\"))))[0]].models[0].contextWindow = $oc_ctx) else . end"
+        oc_jq_filter="$oc_jq_filter | (.models.providers // {}) as \$p | if (\$p | keys | map(select(startswith(\"custom-127\"))) | length) > 0 then (.models.providers[(.models.providers | keys | map(select(startswith(\"custom-127\"))))[0]].models[0].contextWindow = $oc_ctx) else . end"
 
         local _jq_out
         _jq_out=$(sudo jq "$oc_jq_filter" "$openclaw_config") || { echo "⚠️  jq filter failed — config not updated." >&2; }
@@ -4035,6 +4085,22 @@ EOF
                 systemctl --user restart openclaw.service 2>/dev/null || true"
         fi
         print_success "OpenClaw gateway configured (bind: $bind_mode, port: $OPENCLAW_PORT, context: $oc_ctx)."
+
+        # Patch the systemd service ExecStart port — 'openclaw daemon install'
+        # hardcodes --port 18789 regardless of gateway.port in the JSON config.
+        for _oc_svc_name in "openclaw-gateway.service" "openclaw.service"; do
+            local _oc_svc_path="$TARGET_USER_HOME/.config/systemd/user/$_oc_svc_name"
+            if sudo test -f "$_oc_svc_path"; then
+                sudo sed -i "s/gateway --port [0-9]*/gateway --port $OPENCLAW_PORT/g" "$_oc_svc_path"
+                sudo -u "$TARGET_USER" bash -c "
+                    export XDG_RUNTIME_DIR=\"/run/user/\$(id -u)\"
+                    export DBUS_SESSION_BUS_ADDRESS=\"unix:path=\${XDG_RUNTIME_DIR}/bus\"
+                    systemctl --user daemon-reload
+                    systemctl --user restart $_oc_svc_name 2>/dev/null || true"
+                print_success "OpenClaw service port patched to $OPENCLAW_PORT in $_oc_svc_name."
+                break
+            fi
+        done
 
         # UFW for LAN exposure (item 6)
         if [[ "$EXPOSE_OPENCLAW" == "y" ]]; then
