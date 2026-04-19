@@ -119,8 +119,8 @@ setup() {
     [ "$result" = "--hf-repo bartowski/Llama-3.3-70B-Instruct-GGUF" ]
 }
 
-@test "build_llama_hf_args: empty choice returns fallback model path" {
+@test "build_llama_hf_args: empty choice returns empty string (no phantom path)" {
     LLM_DEFAULT_MODEL_CHOICE=""
     result=$(build_llama_hf_args)
-    [[ "$result" == "--model "* ]]
+    [ -z "$result" ]
 }

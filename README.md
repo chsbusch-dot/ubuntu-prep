@@ -160,39 +160,100 @@ You'll walk through the interactive menu as usual, but instead of installing any
 
 ## Configuration
 
-### API Keys
+### `.env.secrets`
 
-The script creates a `~/.env.secrets` file for your API keys. You will be prompted to add keys one-by-one or edit the file directly with `nano`. The file is automatically sourced by `.bashrc` and `.zshrc` and is gitignored to prevent accidental exposure.
+The script creates `~/.env.secrets` from the bundled template during installation. Edit it at any time:
 
 ```bash
 nano ~/.env.secrets
 ```
 
-Example:
+The file is automatically sourced by `.bashrc` and `.zshrc` and gitignored to prevent accidental exposure.
 
-```bash
-# --- API Key Placeholders ---
-# Uncomment and fill in the values for the services you use.
+#### System
 
-# export GITHUB_TOKEN="your_github_token"
-# export AWS_SECRET_ACCESS_KEY="your_aws_secret"
-# export OPENAI_API_KEY="your_openai_key"
-# export GOOGLE_API_KEY="your_google_api_key"
-# export CLAUDE_API_KEY="your_claude_key"
-# export NVIDIA_API_KEY="your_nvidia_api_key"
-# export NVIDIA_NGC_API_KEY="your_nvidia_ngc_key"
-# export HF_TOKEN="hf_your_token_here"
-# export FIRECRAWL_API_KEY=""
-# export TAVILY_API_KEY=""
-# export NVIDIA_VGPU_DRIVER_URL="ftp://192.168.1.31/shared/.../nvidia.deb"
-# export NVIDIA_VGPU_TOKEN_URL="ftp://192.168.1.31/shared/.../token.tok"
-# export NVIDIA_VGPU_DOWNLOAD_AUTH="admin:password" # Works for FTP, HTTP Basic Auth, and SMB
-# export ESXI_HOST="192.168.1.100"
-# export ESXI_USER="root"
-# export ESXI_PASSWORD="your_esxi_password"
-# export OLLAMA_ALLOWED_ORIGINS="https://chat.yourdomain.com,http://localhost:8081"
-# export SYSTEM_TIMEZONE="America/Los_Angeles"
-```
+| Variable | Description |
+|---|---|
+| `TZ` | Timezone (default: `America/Los_Angeles`). Standard POSIX tz format. |
+| `LLAMA_CACHE` | Where llama.cpp stores downloaded models (default: `~/llama.cpp/models`). |
+
+#### NVIDIA Drivers
+
+| Variable | Description |
+|---|---|
+| `NVIDIA_RTX_DRIVER_URL` | `.run` download link for consumer GPU drivers. Get it from [nvidia.com/drivers/unix](https://www.nvidia.com/en-us/drivers/unix/). |
+| `NVIDIA_VGPU_DRIVER_URL` | URL to the `.deb` vGPU guest driver package (FTP, HTTP, or SMB). |
+| `NVIDIA_VGPU_TOKEN_URL` | URL to the vGPU license token file (`.tok`). |
+| `NVIDIA_VGPU_DOWNLOAD_AUTH` | Credentials for authenticated download: `user:password`. Works for FTP, HTTP Basic Auth, and SMB. |
+
+#### ESXi / VM Management (`revert-vm.sh`)
+
+| Variable | Description |
+|---|---|
+| `ESXI_HOST` | IP or hostname of your ESXi host. |
+| `ESXI_USER` | ESXi SSH username (typically `root`). |
+| `ESXI_PASSWORD` | ESXi SSH password. |
+| `GUEST_USER` | Username inside the VM. |
+| `GUEST_PASS` | VM sudo password (used by `revert-vm.sh`). |
+
+#### AI API Keys — Core Providers
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude models. Also accepted as `CLAUDE_API_KEY`. |
+| `OPENAI_API_KEY` | GPT and Codex models. |
+| `GEMINI_API_KEY` | Google Gemini models. Also accepted as `GOOGLE_API_KEY`. |
+| `GROQ_API_KEY` | Groq-hosted Llama / Mixtral. |
+| `MISTRAL_API_KEY` | Mistral AI native models. |
+| `DEEPSEEK_API_KEY` | DeepSeek models. |
+| `HF_TOKEN` | Hugging Face token — required for gated GGUF repos. |
+
+#### AI API Keys — Aggregators & Platforms
+
+| Variable | Description |
+|---|---|
+| `OPENROUTER_API_KEY` | Universal access to most LLMs. |
+| `TOGETHER_API_KEY` | Together AI models. |
+| `MOONSHOT_API_KEY` | Kimi / Moonshot AI. |
+| `MINIMAX_API_KEY` | MiniMax (Abab) models. |
+
+#### AI API Keys — Regional & Specialized
+
+| Variable | Description |
+|---|---|
+| `XAI_API_KEY` | Grok models. |
+| `STEP_API_KEY` | StepFun models. |
+
+#### Search & Scraping
+
+| Variable | Description |
+|---|---|
+| `BRAVE_API_KEY` | Primary default search engine for agents. |
+| `PERPLEXITY_API_KEY` | AI-powered search and synthesis. |
+| `FIRECRAWL_API_KEY` | Advanced search and full-page scraping. |
+| `TAVILY_API_KEY` | AI-optimized search tool. |
+
+#### Communication Channels
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Telegram bot integration. |
+| `DISCORD_TOKEN` | Discord bot integration. |
+| `SLACK_BOT_TOKEN` | Slack workspace integration. |
+
+#### OpenClaw Skills
+
+| Variable | Description |
+|---|---|
+| `GOOGLE_PLACES_API_KEY` | Places / Maps integration. |
+| `NOTION_API_KEY` | Notion workspace integration. |
+| `ELEVENLABS_API_KEY` | ElevenLabs text-to-speech. |
+
+#### Ollama
+
+| Variable | Description |
+|---|---|
+| `OLLAMA_ALLOWED_ORIGINS` | Comma-separated origins allowed to query Ollama when exposed to LAN (e.g. `https://chat.yourdomain.com`). |
 
 ## Testing
 
@@ -229,7 +290,7 @@ The repository includes a comprehensive test suite in `test.sh`. It runs the fol
   ✅ Formatting is consistent (shfmt -i 4 -ci)
 
 === 4. VRAM Fit Validation ===
-  ✅ All 56 model/tier combinations fit (weights + KV@q4_0 + 0.5GB runtime)
+  ✅ All 56 model/tier combinations fit (weights + KV@q4_0 + runtime overhead)
 
 === 5. Repair Helper Logic ===
   ✅ derive_component_status marks healthy full installs as installed

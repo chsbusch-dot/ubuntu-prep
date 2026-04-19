@@ -236,8 +236,8 @@ setup() {
     [ "$(get_llama_repo_path)" = "/home/testuser/llama.cpp" ]
 }
 
-@test "get_llama_cache_path returns TARGET_USER_HOME/llama.cpp/models/models-user" {
-    [ "$(get_llama_cache_path)" = "/home/testuser/llama.cpp/models/models-user" ]
+@test "get_llama_cache_path returns TARGET_USER_HOME/llama.cpp/models" {
+    [ "$(get_llama_cache_path)" = "/home/testuser/llama.cpp/models" ]
 }
 
 @test "get_llama_runtime_pid_path returns TARGET_USER_HOME/.cache/llama-server.pid" {
@@ -251,7 +251,7 @@ setup() {
 @test "path functions all reflect a changed TARGET_USER_HOME" {
     TARGET_USER_HOME="/opt/myservice"
     [ "$(get_llama_repo_path)"         = "/opt/myservice/llama.cpp" ]
-    [ "$(get_llama_cache_path)"        = "/opt/myservice/llama.cpp/models/models-user" ]
+    [ "$(get_llama_cache_path)"        = "/opt/myservice/llama.cpp/models" ]
     [ "$(get_llama_runtime_pid_path)"  = "/opt/myservice/.cache/llama-server.pid" ]
     [ "$(get_llama_runtime_log_path)"  = "/opt/myservice/.cache/llama-server.log" ]
 }

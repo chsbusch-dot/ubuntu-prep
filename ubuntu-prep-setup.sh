@@ -132,8 +132,10 @@ Usage: ubuntu-prep-setup.sh [OPTIONS]
 OPTIONS
   --dry-run, -n            Show what would be installed and exit. No changes made.
   --local-mirror BASE_URL  Clone llama.cpp and LibreChat from a local bare mirror
-                           instead of GitHub. BASE_URL is a git-clonable path prefix.
+                           instead of GitHub, and scp GGUF models from BASE_URL/models/.
+                           BASE_URL is an scp-compatible path prefix.
                            Example: --local-mirror chris@192.168.1.135:/home/chris
+                           Models go in:  chris@192.168.1.135:/home/chris/models/
   --resume                 Resume after reboot checkpoint (NVIDIA driver install).
   --help, -h               Show this help and exit.
 
@@ -148,12 +150,22 @@ USAGE
 }
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --headless) HEADLESS_MODE=true; shift ;;
-        --resume) RESUME_MODE=true; shift ;;
-        --dry-run | -n) DRY_RUN=true; shift ;;
+        --headless)
+            HEADLESS_MODE=true
+            shift
+            ;;
+        --resume)
+            RESUME_MODE=true
+            shift
+            ;;
+        --dry-run | -n)
+            DRY_RUN=true
+            shift
+            ;;
         --local-mirror)
             if [[ -n "${2:-}" && "${2:-}" != --* ]]; then
-                LOCAL_MIRROR_BASE="$2"; shift 2
+                LOCAL_MIRROR_BASE="$2"
+                shift 2
             else
                 echo "Error: --local-mirror requires a BASE_URL argument." >&2
                 echo "Example: --local-mirror chris@192.168.1.135:/home/chris" >&2
@@ -161,7 +173,8 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --local-mirror=*)
-            LOCAL_MIRROR_BASE="${1#--local-mirror=}"; shift
+            LOCAL_MIRROR_BASE="${1#--local-mirror=}"
+            shift
             ;;
         --help | -h)
             show_usage
@@ -570,9 +583,42 @@ check_os() {
     fi
 }
 
+# Blocks until both apt/lists and dpkg frontend locks are free.
+# On a fresh Ubuntu VM, unattended-upgrades can hold the lock for 10-30 min.
+wait_for_apt_lock() {
+    local timeout_s=300 interval_s=5 elapsed=0 shown=false
+    while sudo fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do
+        if [[ "$shown" == "false" ]]; then
+            print_info "Another apt process is running — waiting for lock (up to ${timeout_s}s)..."
+            shown=true
+        fi
+        if [[ $elapsed -ge $timeout_s ]]; then
+            echo "⚠️  apt lock still held after ${timeout_s}s — proceeding anyway."
+            break
+        fi
+        local pkg
+        pkg=$(sudo lsof /var/lib/dpkg/lock-frontend 2>/dev/null |
+            awk 'NR>1{print $2}' | head -1 |
+            xargs -I{} cat /proc/{}/cmdline 2>/dev/null |
+            tr '\0' ' ' | grep -o '[a-z0-9._+-]*\.deb' | head -1 || true)
+        if [[ -n "$pkg" ]]; then
+            printf "  [%3ds] installing: %s\n" "$elapsed" "$pkg"
+        else
+            local tail_line
+            tail_line=$(sudo tail -1 /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null |
+                sed 's/.*INFO //' || true)
+            printf "  [%3ds] %s\n" "$elapsed" "${tail_line:-waiting...}"
+        fi
+        sleep "$interval_s"
+        elapsed=$((elapsed + interval_s))
+    done
+    if [[ "$shown" == "true" ]]; then print_info "Lock released — continuing."; fi
+}
+
 # Function to install base dependencies for the script to run properly
 install_base_dependencies() {
     print_header "Ensuring Base Dependencies are Installed"
+    wait_for_apt_lock
     # Quietly update package lists to ensure install doesn't fail on a fresh system
     sudo apt-get update -qq
     # These are required by various installation functions
@@ -748,7 +794,7 @@ setup_env_secrets() {
 # --- API Key Placeholders ---
 # Uncomment and fill in the values for the services you use.
 #Set Your path to llama.cpp model custom folder
-export LLAMA_CACHE="$HOME/llama.cpp/models/models-user"
+export LLAMA_CACHE="$HOME/llama.cpp/models"
 
 # Export timezone
 export TZ="${GLOBAL_SYSTEM_TIMEZONE:-America/Los_Angeles}"
@@ -1104,7 +1150,7 @@ install_homebrew() {
     sudo chown -R "$TARGET_USER":"$TARGET_USER" /home/linuxbrew
 
     print_info "Running Homebrew installation script..."
-    sudo -u "$TARGET_USER" bash -c "NONINTERACTIVE=1 /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    sudo -u "$TARGET_USER" bash -c "NONINTERACTIVE=1 HOMEBREW_INSTALL_FROM_API=1 /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
 
     local brew_env_str
     brew_env_str=$(
@@ -1143,10 +1189,11 @@ EOF"
     print_success "Google Gemini CLI installed globally."
 }
 
-# 7. Install NVIDIA GPU Driver (consumer RTX or vGPU/custom .deb)
-install_nvidia_driver() {
-    print_header "Installing NVIDIA GPU Driver"
-
+# Ask the user which NVIDIA driver flavour to install.  Called from the main
+# menu when item 7 (or any dependent) is toggled so the question doesn't
+# interrupt the later install phase.  Stores the choice in NVIDIA_DRIVER_TYPE
+# ("1" = consumer, "2" = vGPU).  Returns 0 on success, 1 if the user aborted.
+select_nvidia_driver_type() {
     echo ""
     echo -e "\e[1;36mWhat type of NVIDIA driver do you need?\e[0m"
     echo "  1) Consumer GPU  (GeForce RTX / GTX) — install from Ubuntu driver repository"
@@ -1154,6 +1201,24 @@ install_nvidia_driver() {
     echo ""
     local _gpu_drv_type
     read -rp "Your choice [1/2]: " _gpu_drv_type
+    if [[ "$_gpu_drv_type" != "1" && "$_gpu_drv_type" != "2" ]]; then
+        echo "❌ Invalid choice. NVIDIA GPU Driver not selected."
+        sleep 1.5
+        return 1
+    fi
+    NVIDIA_DRIVER_TYPE="$_gpu_drv_type"
+    return 0
+}
+
+# 7. Install NVIDIA GPU Driver (consumer RTX or vGPU/custom .deb)
+install_nvidia_driver() {
+    print_header "Installing NVIDIA GPU Driver"
+
+    local _gpu_drv_type="${NVIDIA_DRIVER_TYPE:-}"
+    if [[ -z "$_gpu_drv_type" ]]; then
+        select_nvidia_driver_type || return 1
+        _gpu_drv_type="$NVIDIA_DRIVER_TYPE"
+    fi
 
     if [[ "$_gpu_drv_type" == "1" ]]; then
         # ── Consumer GPU: .run installer (works for native and PCIe passthrough) ──
@@ -1688,7 +1753,7 @@ get_llama_repo_path() {
 }
 
 get_llama_cache_path() {
-    echo "$TARGET_USER_HOME/llama.cpp/models/models-user"
+    echo "$TARGET_USER_HOME/llama.cpp/models"
 }
 
 get_llama_runtime_pid_path() {
@@ -2052,8 +2117,8 @@ verify_llama_component() {
     fi
 
     if systemctl list-unit-files 2>/dev/null | grep -q '^llama-server.service'; then
-        print_info "Waiting for llama.cpp server to initialize (timeout 60s)..."
-        if ! wait_for_llama_server_ready "service" 45 2 "$(get_llama_runtime_log_path)"; then
+        print_info "Waiting for llama.cpp server to initialize (timeout 5m)..."
+        if ! wait_for_llama_server_ready "service" 150 2 "$(get_llama_runtime_log_path)"; then
             return 1
         fi
     fi
@@ -2159,11 +2224,17 @@ llama_requires_model_selection() {
 }
 
 llama_should_launch_server() {
-    if [[ "$LLAMA_COMPONENT_ACTION" == "skip" || -z "$LLM_DEFAULT_MODEL_CHOICE" ]]; then
-        return 1
+    [[ "$LLAMA_COMPONENT_ACTION" == "skip" ]] && return 1
+
+    # Service install doesn't require a pre-selected model — llama-server will pull on first start
+    if [[ "$INSTALL_LLAMA_SERVICE" == "y" ]]; then
+        return 0
     fi
 
-    if [[ "$LOAD_DEFAULT_MODEL" == "y" || "$INSTALL_LLAMA_SERVICE" == "y" || "$EXPOSE_LLM_ENGINE" == "y" ]]; then
+    # Transient run modes need a model choice to know what to launch
+    [[ -z "$LLM_DEFAULT_MODEL_CHOICE" ]] && return 1
+
+    if [[ "$LOAD_DEFAULT_MODEL" == "y" || "$EXPOSE_LLM_ENGINE" == "y" ]]; then
         return 0
     fi
 
@@ -2175,7 +2246,7 @@ llama_should_launch_server() {
 }
 
 build_llama_hf_args() {
-    local hf_args="--model /srv/models/llama.gguf"
+    local hf_args=""
 
     case "$LLM_DEFAULT_MODEL_CHOICE" in
         5)
@@ -2259,6 +2330,18 @@ download_hf_model_with_progress() {
         return 0
     fi
 
+    # Try LAN mirror first (scp from LOCAL_MIRROR_BASE/models/<filename>)
+    if [[ -n "${LOCAL_MIRROR_BASE:-}" ]]; then
+        local mirror_src="${LOCAL_MIRROR_BASE}/models/${hf_file}"
+        print_info "Trying LAN mirror: ${mirror_src}" >&2
+        if sudo -u "$TARGET_USER" scp -q -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$mirror_src" "$dest_path" 2>/dev/null; then
+            print_success "Copied from LAN mirror: $(basename "$dest_path")" >&2
+            echo "$dest_path"
+            return 0
+        fi
+        print_info "Not found on LAN mirror — falling back to HuggingFace." >&2
+    fi
+
     local download_url="https://huggingface.co/$hf_repo/resolve/main/$hf_file"
 
     print_info "Downloading model (this may take several minutes)..." >&2
@@ -2288,6 +2371,25 @@ download_hf_model_with_progress() {
     return 0
 }
 
+# Print a one-line VRAM progress bar to stderr (overwrites previous line).
+# Usage: print_vram_progress <baseline_mb> <target_mb> <elapsed_s>
+print_vram_progress() {
+    local baseline_mb="$1" target_mb="$2" elapsed="$3"
+    local current_mb delta_mb delta_gb target_gb pct bar filled empty
+    current_mb=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || echo "$baseline_mb")
+    delta_mb=$((current_mb - baseline_mb))
+    [[ $delta_mb -lt 0 ]] && delta_mb=0
+    delta_gb=$(awk "BEGIN { printf \"%.1f\", $delta_mb / 1024.0 }")
+    target_gb=$(awk "BEGIN { printf \"%.1f\", $target_mb / 1024.0 }")
+    pct=$(awk "BEGIN { p = int(($delta_mb * 100) / $target_mb); print (p > 100 ? 100 : p) }")
+    filled=$((pct * 20 / 100))
+    empty=$((20 - filled))
+    bar=$(printf '%0.s█' $(seq 1 $filled) 2>/dev/null)
+    bar+=$(printf '%0.s░' $(seq 1 $empty) 2>/dev/null)
+    printf "\r\e[1;36mℹ️  Loading model to VRAM: [%s] %s / %s GB (%d%%, %ds)\e[0m\e[K" \
+        "$bar" "$delta_gb" "$target_gb" "$pct" "$elapsed" >&2
+}
+
 wait_for_llama_server_ready() {
     local run_mode="${1:-service}"
     local attempts="${2:-45}"
@@ -2298,6 +2400,16 @@ wait_for_llama_server_ready() {
     local root_status=""
     local last_progress=""
     local elapsed=0
+
+    # VRAM load progress: snapshot baseline now, compute target from model weight
+    local baseline_mb=0 target_mb=0 vram_progress=false
+    if command -v nvidia-smi &>/dev/null; then
+        baseline_mb=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || echo 0)
+        local _model_gb
+        _model_gb=$(get_model_weight_gb "${LLAMA_VRAM_TIER:-16}")
+        target_mb=$(awk "BEGIN { printf \"%d\", $_model_gb * 1024 }")
+        vram_progress=true
+    fi
 
     for ((i = 0; i < attempts; i++)); do
         health_status=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8080/health" 2>/dev/null || echo "000")
@@ -2324,14 +2436,20 @@ wait_for_llama_server_ready() {
             download_progress=$(grep -oE '([0-9]{1,3}(\.[0-9]+)?)%' "$log_file" | tail -n 1 || true) # optional: log may not have progress yet
             if [[ -n "$download_progress" ]]; then
                 if [[ "$download_progress" != "$last_progress" ]]; then
-                    printf "\r\e[1;36mℹ️  llama.cpp model download: %s\e[0m" "$download_progress"
+                    printf "\r\e[1;36mℹ️  llama.cpp model download: %s\e[0m\e[K" "$download_progress"
                     last_progress="$download_progress"
                 fi
+            elif [[ "$vram_progress" == true ]]; then
+                print_vram_progress "$baseline_mb" "$target_mb" "$elapsed"
             else
-                printf "\r\e[1;36mℹ️  llama.cpp server starting... %ds elapsed\e[0m" "$elapsed"
+                printf "\r\e[1;36mℹ️  llama.cpp server starting... %ds elapsed\e[0m\e[K" "$elapsed" >&2
             fi
         else
-            printf "\r\e[1;36mℹ️  llama.cpp server starting... %ds elapsed\e[0m" "$elapsed"
+            if [[ "$vram_progress" == true ]]; then
+                print_vram_progress "$baseline_mb" "$target_mb" "$elapsed"
+            else
+                printf "\r\e[1;36mℹ️  llama.cpp server starting... %ds elapsed\e[0m\e[K" "$elapsed" >&2
+            fi
         fi
 
         sleep "$delay"
@@ -2385,8 +2503,8 @@ start_llama_server_transient() {
     sudo -u "$TARGET_USER" bash -c "$shell_prefix nohup /usr/local/bin/llama-server $hf_args $llama_host_args > \"$llama_log_file\" 2>&1 < /dev/null & echo \$! > \"$llama_pid_file\""
 
     print_success "llama.cpp started in the background on port 8080."
-    print_info "Waiting for llama.cpp to finish loading the selected model..."
-    if ! wait_for_llama_server_ready "transient" 45 2 "$llama_log_file"; then
+    print_info "Waiting for llama.cpp to finish loading the selected model (timeout 5m)..."
+    if ! wait_for_llama_server_ready "transient" 150 2 "$llama_log_file"; then
         return 1
     fi
 
@@ -2400,14 +2518,29 @@ start_llama_server_transient() {
 get_model_weight_gb() {
     local vram_tier="${1:-16}"
     case "$vram_tier" in
-        8) echo "4" ;;   # ~4GB for 7B Q4_K_M
-        16) echo "8" ;;  # ~8GB for 14B Q4_K_M
-        24) echo "14" ;; # ~14GB for 26B Q4_K_M
-        32) echo "18" ;; # ~18GB for 32B Q4_K_M
-        48) echo "40" ;; # ~40GB for 70B Q4_K_M
-        72) echo "40" ;; # ~40GB for 72B Q4_K_M
-        96) echo "40" ;; # ~40GB for 72B Q4_K_M (bigger tier, same model)
+        8) echo "4.4" ;;  # 7B Q4_K_M
+        16) echo "8.4" ;; # 14B Q4_K_M
+        24) echo "19" ;;  # 32B Q4_K_M (Qwen2.5-Coder-32B)
+        32) echo "19" ;;  # 32B Q4_K_M
+        48) echo "43" ;;  # 70B Q4_K_M (~42.5 GB) — round up for headroom
+        72) echo "47" ;;  # 72B Q4_K_M (Qwen2.5-72B)
+        96) echo "47" ;;  # 72B Q4_K_M (Qwen2.5-72B)
         *) echo "8" ;;
+    esac
+}
+
+# n_layers per default tier model — used in KV cache formula
+get_model_n_layers() {
+    local vram_tier="${1:-16}"
+    case "$vram_tier" in
+        8) echo "32" ;;  # 7B
+        16) echo "48" ;; # 14B
+        24) echo "64" ;; # 32B
+        32) echo "64" ;; # 32B
+        48) echo "80" ;; # 70B
+        72) echo "80" ;; # 72B
+        96) echo "80" ;; # 72B
+        *) echo "48" ;;
     esac
 }
 
@@ -2430,17 +2563,17 @@ get_context_defaults() {
             UBATCH_DEFAULT=1024
             ;;
         24)
-            CTX_DEFAULT=81920
+            CTX_DEFAULT=32768
             CTK_DEFAULT="q4_0"
             UBATCH_DEFAULT=1024
             ;;
         32)
-            CTX_DEFAULT=81920
+            CTX_DEFAULT=65536
             CTK_DEFAULT="q4_0"
             UBATCH_DEFAULT=2048
             ;;
         48)
-            CTX_DEFAULT=131072
+            CTX_DEFAULT=32768
             CTK_DEFAULT="q4_0"
             UBATCH_DEFAULT=2048
             ;;
@@ -2478,21 +2611,29 @@ cache_type_bytes() {
 
 # Estimate total VRAM usage: model weights + KV cache + runtime overhead
 # Returns: "total_gb model_gb kv_gb overhead_gb"
+#
+# KV cache formula (grounded in llama.cpp allocator):
+#   kv_bytes = 2 * n_ctx * n_layers * n_kv_heads * head_dim * bytes_per_elem
+# Modern GQA models use n_kv_heads * head_dim ≈ 1024, so:
+#   kv_gb ≈ (n_ctx/1024) * n_layers * bytes_per / 512 * padding_factor
+# Calibrated against real llama.cpp allocations on 32B @ 80K q4_0 = 5.6 GB.
 estimate_vram_usage() {
     local model_gb="$1"
     local ctx_size="$2"
     local ctk="$3"
+    local n_layers="${4:-48}"
 
     local bytes_per
     bytes_per=$(cache_type_bytes "$ctk")
-    local overhead="0.5"
 
-    # Heuristic: KV cache ≈ ctx_size * bytes_per_elem * scaling_factor
-    # Uses sqrt(model_gb/7) because KV cache depends on n_layers × n_kv_heads × head_dim,
-    # which grows sublinearly vs total params (GQA, MoE reduce KV heads).
-    # Calibrated: 7B@4K f16 ≈ 0.2GB; 26B@80K q4_0 ≈ 3GB (confirmed on 24GB GPU).
+    # Runtime overhead grows modestly with model size (compute buffers,
+    # flash-attn workspace, graph tensors). ~0.8 GB for 7B, ~1.5 GB for 70B.
+    local overhead
+    overhead=$(awk "BEGIN { printf \"%.1f\", 0.6 + $model_gb * 0.020 }")
+
+    # KV cache: base formula + 12% for llama.cpp buffer padding/alignment
     local kv_gb
-    kv_gb=$(awk "BEGIN { printf \"%.1f\", ($ctx_size / 1024.0) * ($bytes_per / 2.0) * sqrt($model_gb / 7.0) * 0.10 }")
+    kv_gb=$(awk "BEGIN { printf \"%.1f\", ($ctx_size / 1024.0) * $n_layers * $bytes_per / 512.0 * 1.12 }")
 
     local total_gb
     total_gb=$(awk "BEGIN { printf \"%.1f\", $model_gb + $kv_gb + $overhead }")
@@ -2523,8 +2664,9 @@ configure_context_memory() {
         hw_capacity="$vram_tier"
     fi
 
-    local model_gb
+    local model_gb n_layers
     model_gb=$(get_model_weight_gb "$vram_tier")
+    n_layers=$(get_model_n_layers "$vram_tier")
     get_context_defaults "$vram_tier"
 
     # Apply headless defaults if set, otherwise use smart defaults
@@ -2580,15 +2722,13 @@ configure_context_memory() {
         "turbo3  — Extreme 3-bit for maximum context"
     )
 
-    local width=56
-
     while true; do
         clear
         print_status_header
 
         # Calculate VRAM estimate
         local estimate
-        estimate=$(estimate_vram_usage "$model_gb" "$ctx" "$ctk")
+        estimate=$(estimate_vram_usage "$model_gb" "$ctx" "$ctk" "$n_layers")
         local total_gb model_disp kv_gb overhead_gb
         total_gb=$(echo "$estimate" | awk '{print $1}')
         model_disp=$(echo "$estimate" | awk '{print $2}')
@@ -2616,12 +2756,12 @@ configure_context_memory() {
         [[ "$target_backend" == "llama_cuda" ]] && mlock_item=7 && dio_item=8
 
         echo ""
-        echo "┌──────────────────────────────────────────────────────────┐"
-        printf "│ %-${width}s │\n" " 1. Context size:     [$ctx] tokens"
-        printf "│ %-${width}s │\n" " 2. KV cache type:    [$ctk]  (K and V matched)"
-        printf "│ %-${width}s │\n" " 3. CPU MoE offload:  [$moe_disp]"
-        printf "│ %-${width}s │\n" " 4. Flash attention:  [$fa_disp]"
-        printf "│ %-${width}s │\n" " 5. Ubatch size:      [$ubatch]"
+        echo -e "\e[1;36mContext & Memory:\e[0m"
+        echo " 1. Context size:     [$ctx] tokens"
+        echo " 2. KV cache type:    [$ctk]  (K and V matched)"
+        echo " 3. CPU MoE offload:  [$moe_disp]"
+        echo " 4. Flash attention:  [$fa_disp]"
+        echo " 5. Ubatch size:      [$ubatch]"
         if [[ "$target_backend" == "llama_cuda" ]]; then
             local ngl_disp
             if [[ "$fit_mode" == "y" ]]; then
@@ -2629,30 +2769,28 @@ configure_context_memory() {
             else
                 ngl_disp="$ngl"
             fi
-            printf "│ %-${width}s │\n" " 6. GPU layers:       [$ngl_disp]  (-ngl / --fit)"
+            echo " 6. GPU layers:       [$ngl_disp]  (-ngl / --fit)"
         fi
-        printf "│ %-${width}s │\n" " ${mlock_item}. Mem lock (--mlock): [$mlock_disp]  (prevent idle swap)"
-        printf "│ %-${width}s │\n" " ${dio_item}. Direct I/O (-dio):  [$dio_disp]  (prevent tensor hang)"
-        printf "│ %-${width}s │\n" ""
-        printf "│ %-${width}s │\n" " Model weights:    ${model_disp} GB"
-        printf "│ %-${width}s │\n" " KV cache:         ${kv_gb} GB"
-        printf "│ %-${width}s │\n" " Runtime overhead: ~${overhead_gb} GB"
-        printf "│ %-${width}s │\n" " ───────────────"
+        echo " ${mlock_item}. Mem lock (--mlock): [$mlock_disp]  (prevent idle swap)"
+        echo " ${dio_item}. Direct I/O (-dio):  [$dio_disp]  (prevent tensor hang)"
+        echo ""
+        echo " Model weights:    ${model_disp} GB"
+        echo " KV cache:         ${kv_gb} GB"
+        echo " Runtime overhead: ~${overhead_gb} GB"
+        echo " ───────────────"
         if [[ -n "$fit_color" ]]; then
-            # OOM line with colour — use echo -e for ANSI
-            echo -e "│ $(printf "%-${width}s" " Estimated total:  ${fit_color}${total_gb} / ${hw_capacity} GB  ${fits}\e[0m")   │"
+            echo -e " Estimated total:  ${fit_color}${total_gb} / ${hw_capacity} GB  ${fits}\e[0m"
         else
-            printf "│ %-${width}s │\n" " Estimated total:  ${total_gb} / ${hw_capacity} GB  ${fits}"
+            echo " Estimated total:  ${total_gb} / ${hw_capacity} GB  ${fits}"
         fi
-        printf "│ %-${width}s │\n" ""
+        echo ""
 
         if [[ "$fits" == *"OOM"* ]]; then
-            printf "│ %-${width}s │\n" " ⚠️  Reduce context or switch to q4_0/turbo4/turbo3"
-            printf "│ %-${width}s │\n" ""
+            echo " ⚠️  Reduce context or switch to q4_0/turbo4/turbo3"
+            echo ""
         fi
 
-        printf "│ %-${width}s │\n" " [c] Confirm  [1-${dio_item}] Change  [d] Defaults"
-        echo "└──────────────────────────────────────────────────────────┘"
+        echo " [c] Confirm  [1-${dio_item}] Change  [d] Defaults"
         echo ""
         read -p "Your choice: " mem_choice
 
@@ -2960,6 +3098,87 @@ configure_llm_model_prompt() {
     done
 }
 
+configure_llm_launch_options() {
+    local effective_backend_target="$1"
+
+    local keys=() labels=() vals=()
+
+    if [[ "$effective_backend_target" == "llama" ]]; then
+        keys+=("expose")
+        labels+=("Expose to LAN  (llama-server --host 0.0.0.0)")
+        vals+=("${EXPOSE_LLM_ENGINE:-n}")
+    elif [[ "$effective_backend_target" == "ollama" ]]; then
+        keys+=("expose")
+        labels+=("Expose to LAN  (Ollama bind 0.0.0.0:11434)")
+        vals+=("${EXPOSE_LLM_ENGINE:-n}")
+    fi
+
+    if [[ "$LLAMA_COMPONENT_ACTION" != "skip" ]]; then
+        keys+=("service")
+        labels+=("Install llama-server as a system service")
+        vals+=("${INSTALL_LLAMA_SERVICE:-n}")
+        keys+=("bench")
+        labels+=("Run llama-bench after install")
+        vals+=("${RUN_LLAMA_BENCH:-n}")
+    fi
+
+    if [[ "$LIBRECHAT_COMPONENT_ACTION" != "skip" ]]; then
+        local lc_val="n"
+        [[ "${LIBRECHAT_PORT:-3080}" == "8083" ]] && lc_val="y"
+        keys+=("lc_port")
+        labels+=("Run LibreChat on port 8083  (default: 3080)")
+        vals+=("$lc_val")
+    fi
+
+    keys+=("ufw")
+    labels+=("Enable UFW automatically when ports are opened")
+    vals+=("${ENABLE_UFW_AUTOMATICALLY:-n}")
+
+    local count=${#keys[@]}
+    [[ $count -eq 0 ]] && return 0
+
+    local first_render=true
+    local menu_lines=$((count + 6))
+    while true; do
+        if [[ "$first_render" == true ]]; then
+            first_render=false
+        else
+            printf '\e[%dA\e[J' "$menu_lines"
+        fi
+        echo ""
+        echo -e "\e[1;36mLaunch Options:\e[0m"
+        for ((i = 0; i < count; i++)); do
+            local mark=" "
+            [[ "${vals[$i]}" == "y" ]] && mark="x"
+            printf " [%s] %d. %s\n" "$mark" "$((i + 1))" "${labels[$i]}"
+        done
+        echo ""
+        echo " [c] Confirm   [1-${count}] Toggle"
+        echo ""
+        read -rp "Your choice: " opt_choice
+
+        case "$opt_choice" in
+            [cC]) break ;;
+            [1-9])
+                local idx=$((opt_choice - 1))
+                if ((idx >= 0 && idx < count)); then
+                    if [[ "${vals[$idx]}" == "y" ]]; then vals[$idx]="n"; else vals[$idx]="y"; fi
+                fi
+                ;;
+        esac
+    done
+
+    for ((i = 0; i < count; i++)); do
+        case "${keys[$i]}" in
+            expose) EXPOSE_LLM_ENGINE="${vals[$i]}" ;;
+            service) INSTALL_LLAMA_SERVICE="${vals[$i]}" ;;
+            bench) RUN_LLAMA_BENCH="${vals[$i]}" ;;
+            lc_port) [[ "${vals[$i]}" == "y" ]] && LIBRECHAT_PORT="8083" || LIBRECHAT_PORT="3080" ;;
+            ufw) ENABLE_UFW_AUTOMATICALLY="${vals[$i]}" ;;
+        esac
+    done
+}
+
 configure_local_llm_components() {
     local selected_backend=""
     local openwebui_selected=0
@@ -3099,36 +3318,8 @@ configure_local_llm_components() {
         effective_backend_target="$FRONTEND_BACKEND_TARGET"
     fi
 
-    if [[ "$effective_backend_target" == "llama" ]]; then
-        echo ""
-        if ask_yn "Allow external connections to Llama.CPP (add --host 0.0.0.0)? [y/N]: " "n"; then
-            EXPOSE_LLM_ENGINE="y"
-        fi
-    elif [[ "$effective_backend_target" == "ollama" ]]; then
-        echo ""
-        if ask_yn "Allow external connections to Ollama (bind 0.0.0.0:11434)? [y/N]: " "n"; then
-            EXPOSE_LLM_ENGINE="y"
-        fi
-    fi
-
-    if [[ "$LLAMA_COMPONENT_ACTION" != "skip" ]]; then
-        echo ""
-        if ask_yn "Install llama.cpp as a system service? [y/N]: " "n"; then
-            INSTALL_LLAMA_SERVICE="y"
-        fi
-
-        echo ""
-        if ask_yn "Run llama.cpp benchmark after install? [y/N]: " "n"; then
-            RUN_LLAMA_BENCH="y"
-        fi
-    fi
-
-    if [[ "$LIBRECHAT_COMPONENT_ACTION" != "skip" ]]; then
-        echo ""
-        if ask_yn "Run LibreChat on port 8083 instead of 3080? [y/N]: " "n"; then
-            LIBRECHAT_PORT="8083"
-        fi
-    fi
+    echo ""
+    configure_llm_launch_options "$effective_backend_target"
 
     if llama_requires_model_selection; then
         force_llama_model_selection=true
@@ -3152,11 +3343,6 @@ configure_local_llm_components() {
                 configure_llm_model_prompt "ollama"
             fi
         fi
-    fi
-
-    echo ""
-    if ask_yn "Enable UFW automatically after this run if ports were opened? [y/N]: " "n"; then
-        ENABLE_UFW_AUTOMATICALLY="y"
     fi
 
     INSTALL_OPENWEBUI=$([[ "$OPENWEBUI_COMPONENT_ACTION" != "skip" ]] && echo "y" || echo "n")
@@ -3290,7 +3476,7 @@ install_local_llm() {
     if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
         print_info "Installing build dependencies for llama.cpp..."
         sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake ccache libcurl4-openssl-dev libssl-dev
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake ninja-build ccache libcurl4-openssl-dev libssl-dev
 
         local cmake_flags="-DGGML_NATIVE=OFF"
         local export_cmd=""
@@ -3355,7 +3541,7 @@ install_local_llm() {
             # Clean previous build to prevent CMake caching old NCCL configuration
             rm -rf build
             $export_cmd
-            cmake -B build $cmake_flags
+            cmake -B build -G Ninja $cmake_flags
             cmake --build build --config Release -j $(nproc)
         "
         print_success "llama.cpp built successfully."
@@ -3367,41 +3553,50 @@ install_local_llm() {
         echo ""
         hf_args=$(build_llama_hf_args)
 
-        if [[ "$install_llamacpp_cuda" == "y" ]]; then
-            if [[ "$LLAMA_FIT" == "y" ]]; then
-                llama_host_args+=" --fit on --fit-ctx ${LLAMA_FIT_CTX:-${LLAMA_CTX_SIZE:-65536}}"
-            else
-                llama_host_args+=" -ngl ${LLAMA_NGL:-99}"
+        # TinyStories-656K is a sub-1MB test model with a tiny trained context
+        # and no MoE. Advanced production flags (--cpu-moe, large -c, quantized
+        # KV cache, flash-attn, -dio) SEGV on it. Apply only a minimal safe set.
+        if [[ "$LLM_DEFAULT_MODEL_CHOICE" == "5" ]]; then
+            llama_host_args=" -c 2048"
+            [[ "$install_llamacpp_cuda" == "y" ]] && llama_host_args+=" -ngl 99"
+            [[ "$EXPOSE_LLM_ENGINE" == "y" ]] && llama_host_args+=" --host 0.0.0.0"
+        else
+            if [[ "$install_llamacpp_cuda" == "y" ]]; then
+                if [[ "$LLAMA_FIT" == "y" ]]; then
+                    llama_host_args+=" --fit on --fit-ctx ${LLAMA_FIT_CTX:-${LLAMA_CTX_SIZE:-65536}}"
+                else
+                    llama_host_args+=" -ngl ${LLAMA_NGL:-99}"
+                fi
             fi
-        fi
-        if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
-            llama_host_args+=" --host 0.0.0.0"
-        fi
+            if [[ "$EXPOSE_LLM_ENGINE" == "y" ]]; then
+                llama_host_args+=" --host 0.0.0.0"
+            fi
 
-        # Context & memory flags from configure_context_memory()
-        if [[ -n "$LLAMA_CTX_SIZE" ]]; then
-            llama_host_args+=" -c $LLAMA_CTX_SIZE"
-        fi
-        if [[ -n "$LLAMA_CACHE_TYPE_K" ]]; then
-            llama_host_args+=" -ctk $LLAMA_CACHE_TYPE_K"
-        fi
-        if [[ -n "$LLAMA_CACHE_TYPE_V" ]]; then
-            llama_host_args+=" -ctv $LLAMA_CACHE_TYPE_V"
-        fi
-        if [[ "$LLAMA_FLASH_ATTN" == "y" && "$install_llamacpp_cuda" == "y" ]]; then
-            llama_host_args+=" --flash-attn on"
-        fi
-        if [[ -n "$LLAMA_UBATCH" ]]; then
-            llama_host_args+=" --ubatch-size $LLAMA_UBATCH"
-        fi
-        if [[ "$LLAMA_CPU_MOE" == "y" ]]; then
-            llama_host_args+=" --cpu-moe"
-        fi
-        if [[ "$LLAMA_MLOCK" == "y" ]]; then
-            llama_host_args+=" --mlock"
-        fi
-        if [[ "$LLAMA_DIO" == "y" ]]; then
-            llama_host_args+=" -dio"
+            # Context & memory flags from configure_context_memory()
+            if [[ -n "$LLAMA_CTX_SIZE" ]]; then
+                llama_host_args+=" -c $LLAMA_CTX_SIZE"
+            fi
+            if [[ -n "$LLAMA_CACHE_TYPE_K" ]]; then
+                llama_host_args+=" -ctk $LLAMA_CACHE_TYPE_K"
+            fi
+            if [[ -n "$LLAMA_CACHE_TYPE_V" ]]; then
+                llama_host_args+=" -ctv $LLAMA_CACHE_TYPE_V"
+            fi
+            if [[ "$LLAMA_FLASH_ATTN" == "y" && "$install_llamacpp_cuda" == "y" ]]; then
+                llama_host_args+=" --flash-attn on"
+            fi
+            if [[ -n "$LLAMA_UBATCH" ]]; then
+                llama_host_args+=" --ubatch-size $LLAMA_UBATCH"
+            fi
+            if [[ "$LLAMA_CPU_MOE" == "y" ]]; then
+                llama_host_args+=" --cpu-moe"
+            fi
+            if [[ "$LLAMA_MLOCK" == "y" ]]; then
+                llama_host_args+=" --mlock"
+            fi
+            if [[ "$LLAMA_DIO" == "y" ]]; then
+                llama_host_args+=" -dio"
+            fi
         fi
 
         # Pre-download model with curl progress bar (if using HF repo).
@@ -3434,12 +3629,43 @@ install_local_llm() {
             bench_out=$(mktemp "${TMPDIR:-/tmp}/llama-bench.XXXXXX")
             local bench_status=0
 
+            # Background ticker: shows VRAM-load progress during the silent phase.
+            # CUDA builds poll nvidia-smi for live GB-loaded + % against the model's
+            # expected weight. CPU builds fall back to elapsed-time. Exits once
+            # llama-bench emits a table row or "warmup" line.
+            local baseline_mb=0 target_mb=0
+            if [[ "$install_llamacpp_cuda" == "y" ]] && command -v nvidia-smi &>/dev/null; then
+                baseline_mb=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || echo 0)
+                target_mb=$(awk "BEGIN { printf \"%d\", $model_gb * 1024 }")
+            fi
+            (
+                local elapsed=0
+                while true; do
+                    sleep 2
+                    elapsed=$((elapsed + 2))
+                    if grep -qE '^\||warmup' "$bench_out" 2>/dev/null; then
+                        printf "\r\e[K" >&2
+                        exit 0
+                    fi
+                    if [[ $target_mb -gt 0 ]]; then
+                        print_vram_progress "$baseline_mb" "$target_mb" "$elapsed"
+                    else
+                        printf "\r\e[1;36mℹ️  Loading model... %ds elapsed\e[0m\e[K" "$elapsed" >&2
+                    fi
+                done
+            ) &
+            local ticker_pid=$!
+
             set +e
             sudo -u "$TARGET_USER" bash -c \
                 "$env_prefix llama-bench $hf_args -ngl $ngl_bench -r 3 --progress -o md" \
                 2>&1 | tee "$bench_out"
             bench_status=${PIPESTATUS[0]}
             set -e
+
+            kill "$ticker_pid" 2>/dev/null || true
+            wait "$ticker_pid" 2>/dev/null || true
+            printf "\r\e[K" >&2
 
             if [[ $bench_status -ne 0 ]]; then
                 echo "❌ llama-bench failed while preparing or benchmarking the selected model."
@@ -3474,6 +3700,19 @@ install_local_llm() {
                 cat "$bench_out" || true # display-only: show raw output as fallback
             fi
             rm -f "$bench_out"
+        fi
+
+        # Recovery: model missing (e.g. resume with incomplete state) — ask now
+        if [[ -z "$hf_args" && ("$LOAD_DEFAULT_MODEL" == "y" || "$INSTALL_LLAMA_SERVICE" == "y") ]]; then
+            echo ""
+            print_info "⚠️  No model was configured — a model is required to start llama-server."
+            configure_llm_model_prompt "${LLAMA_BUILD_VARIANT:-llama_cpu}"
+            hf_args=$(build_llama_hf_args)
+            if [[ "$hf_args" == *"--hf-repo"* ]]; then
+                local recovered_model
+                recovered_model=$(download_hf_model_with_progress "$hf_args" "$(get_llama_cache_path)")
+                [[ -n "$recovered_model" ]] && hf_args="--model $recovered_model"
+            fi
         fi
 
         if llama_should_launch_server; then
@@ -3784,7 +4023,7 @@ EOF"
 
     if [[ "$install_llamacpp_cpu" == "y" || "$install_llamacpp_cuda" == "y" ]]; then
         echo ""
-        if [[ "$INSTALL_LLAMA_SERVICE" == "y" ]]; then
+        if [[ "$llama_runtime_mode" == "service" ]]; then
             print_info "⚠️  NOTE: llama.cpp is currently running as a background service!"
             print_info "Before running manually, you MUST stop the service to free up your VRAM:"
             echo -e "\e[1;33msudo systemctl stop llama-server\e[0m\n"
@@ -5271,8 +5510,14 @@ main() {
         TARGET_USER_HOME="$RESUME_TARGET_USER_HOME"
         IS_DIFFERENT_USER="$RESUME_IS_DIFFERENT_USER"
         HAS_NVIDIA_GPU="$RESUME_HAS_NVIDIA_GPU"
+        NVIDIA_DRIVER_TYPE="${RESUME_NVIDIA_DRIVER_TYPE:-}"
         LLM_BACKEND_CHOICE="${RESUME_LLM_BACKEND_CHOICE:-}"
         FRONTEND_BACKEND_TARGET="${RESUME_FRONTEND_BACKEND_TARGET:-}"
+        LLAMA_COMPONENT_ACTION="${RESUME_LLAMA_COMPONENT_ACTION:-skip}"
+        OLLAMA_COMPONENT_ACTION="${RESUME_OLLAMA_COMPONENT_ACTION:-skip}"
+        OPENWEBUI_COMPONENT_ACTION="${RESUME_OPENWEBUI_COMPONENT_ACTION:-skip}"
+        LIBRECHAT_COMPONENT_ACTION="${RESUME_LIBRECHAT_COMPONENT_ACTION:-skip}"
+        OPENCLAW_COMPONENT_ACTION="${RESUME_OPENCLAW_COMPONENT_ACTION:-skip}"
         LLAMA_CTX_SIZE="${RESUME_LLAMA_CTX_SIZE:-65536}"
         LOAD_DEFAULT_MODEL="${RESUME_LOAD_DEFAULT_MODEL:-n}"
         RUN_LLAMA_BENCH="${RESUME_RUN_LLAMA_BENCH:-n}"
@@ -5282,6 +5527,20 @@ main() {
         INSTALL_LIBRECHAT="${RESUME_INSTALL_LIBRECHAT:-n}"
         LLAMACPP_MODEL_REPO="${RESUME_LLAMACPP_MODEL_REPO:-}"
         OLLAMA_PULL_MODEL="${RESUME_OLLAMA_PULL_MODEL:-}"
+        LLM_DEFAULT_MODEL_CHOICE="${RESUME_LLM_DEFAULT_MODEL_CHOICE:-}"
+        SELECTED_MODEL_REPO="${RESUME_SELECTED_MODEL_REPO:-}"
+        LLAMA_BUILD_VARIANT="${RESUME_LLAMA_BUILD_VARIANT:-}"
+        LLAMA_VRAM_TIER="${RESUME_LLAMA_VRAM_TIER:-}"
+        LLAMA_NGL="${RESUME_LLAMA_NGL:-}"
+        LLAMA_CACHE_TYPE_K="${RESUME_LLAMA_CACHE_TYPE_K:-}"
+        LLAMA_CACHE_TYPE_V="${RESUME_LLAMA_CACHE_TYPE_V:-}"
+        LLAMA_FLASH_ATTN="${RESUME_LLAMA_FLASH_ATTN:-n}"
+        LLAMA_UBATCH="${RESUME_LLAMA_UBATCH:-}"
+        LLAMA_CPU_MOE="${RESUME_LLAMA_CPU_MOE:-y}"
+        LLAMA_FIT="${RESUME_LLAMA_FIT:-n}"
+        LLAMA_FIT_CTX="${RESUME_LLAMA_FIT_CTX:-}"
+        LLAMA_MLOCK="${RESUME_LLAMA_MLOCK:-n}"
+        LLAMA_DIO="${RESUME_LLAMA_DIO:-n}"
         OPENCLAW_RELEASE_CHANNEL="${RESUME_OPENCLAW_RELEASE_CHANNEL:-latest}"
         EXPOSE_OPENCLAW="${RESUME_EXPOSE_OPENCLAW:-n}"
         OPENCLAW_PORT="${RESUME_OPENCLAW_PORT:-18789}"
@@ -5613,6 +5872,19 @@ main() {
                 # Apply dependency rules for the toggled item
                 apply_deps "$master_index"
 
+                # NVIDIA driver flavour must be decided up front (not deferred to
+                # install time) so the user isn't interrupted mid-install.  This
+                # fires whether item 7 was toggled directly or auto-added as a
+                # dependency of CUDA/CTK/cuDNN.
+                if [[ ${MASTER_SELECTIONS[7]} -eq 1 && ${MASTER_INSTALLED_STATE[7]} -eq 0 && -z "${NVIDIA_DRIVER_TYPE:-}" ]]; then
+                    if ! select_nvidia_driver_type; then
+                        MASTER_SELECTIONS[7]=0
+                        apply_deps 7
+                    fi
+                elif [[ ${MASTER_SELECTIONS[7]} -eq 0 && -n "${NVIDIA_DRIVER_TYPE:-}" ]]; then
+                    NVIDIA_DRIVER_TYPE=""
+                fi
+
                 # LLM Stack (14) has runtime-conditional deps based on chosen sub-options
                 if [[ $master_index -eq 14 && ${MASTER_SELECTIONS[14]} -eq 1 ]]; then
                     local auto_selected=""
@@ -5654,6 +5926,12 @@ main() {
                 for master_index in "${!MASTER_SELECTIONS[@]}"; do
                     [[ ${MASTER_SELECTIONS[$master_index]} -eq 1 ]] && apply_deps "$master_index"
                 done
+                if [[ ${MASTER_SELECTIONS[7]} -eq 1 && ${MASTER_INSTALLED_STATE[7]} -eq 0 && -z "${NVIDIA_DRIVER_TYPE:-}" ]]; then
+                    if ! select_nvidia_driver_type; then
+                        MASTER_SELECTIONS[7]=0
+                        apply_deps 7
+                    fi
+                fi
                 echo -e "\n[Info] 'Select all' skips Local LLM Support and OpenClaw because they require explicit repair/install choices." && sleep 2
             elif [[ "$choice" == "i" || "$choice" == "I" ]]; then
                 break
@@ -6033,10 +6311,16 @@ RESUME_TARGET_USER="${TARGET_USER}"
 RESUME_TARGET_USER_HOME="${TARGET_USER_HOME}"
 RESUME_IS_DIFFERENT_USER="${IS_DIFFERENT_USER}"
 RESUME_HAS_NVIDIA_GPU="${HAS_NVIDIA_GPU}"
+RESUME_NVIDIA_DRIVER_TYPE="${NVIDIA_DRIVER_TYPE:-}"
 
 # LLM config
 RESUME_LLM_BACKEND_CHOICE="${LLM_BACKEND_CHOICE:-}"
 RESUME_FRONTEND_BACKEND_TARGET="${FRONTEND_BACKEND_TARGET:-}"
+RESUME_LLAMA_COMPONENT_ACTION="${LLAMA_COMPONENT_ACTION:-skip}"
+RESUME_OLLAMA_COMPONENT_ACTION="${OLLAMA_COMPONENT_ACTION:-skip}"
+RESUME_OPENWEBUI_COMPONENT_ACTION="${OPENWEBUI_COMPONENT_ACTION:-skip}"
+RESUME_LIBRECHAT_COMPONENT_ACTION="${LIBRECHAT_COMPONENT_ACTION:-skip}"
+RESUME_OPENCLAW_COMPONENT_ACTION="${OPENCLAW_COMPONENT_ACTION:-skip}"
 RESUME_LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-65536}"
 RESUME_LOAD_DEFAULT_MODEL="${LOAD_DEFAULT_MODEL:-n}"
 RESUME_RUN_LLAMA_BENCH="${RUN_LLAMA_BENCH:-n}"
@@ -6046,6 +6330,20 @@ RESUME_INSTALL_OPENWEBUI="${INSTALL_OPENWEBUI:-n}"
 RESUME_INSTALL_LIBRECHAT="${INSTALL_LIBRECHAT:-n}"
 RESUME_LLAMACPP_MODEL_REPO="${LLAMACPP_MODEL_REPO:-}"
 RESUME_OLLAMA_PULL_MODEL="${OLLAMA_PULL_MODEL:-}"
+RESUME_LLM_DEFAULT_MODEL_CHOICE="${LLM_DEFAULT_MODEL_CHOICE:-}"
+RESUME_SELECTED_MODEL_REPO="${SELECTED_MODEL_REPO:-}"
+RESUME_LLAMA_BUILD_VARIANT="${LLAMA_BUILD_VARIANT:-}"
+RESUME_LLAMA_VRAM_TIER="${LLAMA_VRAM_TIER:-}"
+RESUME_LLAMA_NGL="${LLAMA_NGL:-}"
+RESUME_LLAMA_CACHE_TYPE_K="${LLAMA_CACHE_TYPE_K:-}"
+RESUME_LLAMA_CACHE_TYPE_V="${LLAMA_CACHE_TYPE_V:-}"
+RESUME_LLAMA_FLASH_ATTN="${LLAMA_FLASH_ATTN:-n}"
+RESUME_LLAMA_UBATCH="${LLAMA_UBATCH:-}"
+RESUME_LLAMA_CPU_MOE="${LLAMA_CPU_MOE:-y}"
+RESUME_LLAMA_FIT="${LLAMA_FIT:-n}"
+RESUME_LLAMA_FIT_CTX="${LLAMA_FIT_CTX:-}"
+RESUME_LLAMA_MLOCK="${LLAMA_MLOCK:-n}"
+RESUME_LLAMA_DIO="${LLAMA_DIO:-n}"
 
 # OpenClaw config
 RESUME_OPENCLAW_RELEASE_CHANNEL="${OPENCLAW_RELEASE_CHANNEL:-latest}"

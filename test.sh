@@ -529,13 +529,54 @@ command -v bats &>/dev/null || try_install bats || true
 BATS_DIR="$SCRIPT_DIR/tests"
 if command -v bats &>/dev/null; then
     if [ -d "$BATS_DIR" ] && compgen -G "$BATS_DIR/*.bats" >/dev/null; then
-        bats_output=$(bats "$BATS_DIR" 2>&1 || true)
-        if echo "$bats_output" | tail -n 5 | grep -q "failure"; then
-            fail "Bats reported failures"
-            echo "$bats_output" | sed 's/^/    /'
+        bats_pass=0
+        bats_fail=0
+        bats_skip=0
+        bats_total="?"
+        in_failure=false
+
+        # Process substitution keeps the while loop in the current shell so
+        # bats_pass/fail/skip and TOTAL_ERRORS are updated in place.
+        while IFS= read -r line; do
+            case "$line" in
+                [0-9]*".."[0-9]*)          # plan line: "1..N"
+                    bats_total="${line#*..}"
+                    ;;
+                "ok "*)
+                    rest="${line#ok }"
+                    test_name="${rest#* }"  # strip leading test number
+                    in_failure=false
+                    if [[ "$test_name" == *" # skip"* ]]; then
+                        test_name="${test_name% # skip*}"
+                        bats_skip=$(( bats_skip + 1 ))
+                        n=$(( bats_pass + bats_fail + bats_skip ))
+                        printf "  [%3d/%s] ${YELLOW}↷${RESET} %s (skipped)\n" "$n" "$bats_total" "$test_name"
+                    else
+                        bats_pass=$(( bats_pass + 1 ))
+                        n=$(( bats_pass + bats_fail + bats_skip ))
+                        printf "  [%3d/%s] ${GREEN}✓${RESET} %s\n" "$n" "$bats_total" "$test_name"
+                    fi
+                    ;;
+                "not ok "*)
+                    rest="${line#not ok }"
+                    test_name="${rest#* }"
+                    bats_fail=$(( bats_fail + 1 ))
+                    n=$(( bats_pass + bats_fail + bats_skip ))
+                    printf "  [%3d/%s] ${RED}✗${RESET} %s\n" "$n" "$bats_total" "$test_name"
+                    in_failure=true
+                    ;;
+                "# "*)
+                    # Diagnostic lines (file/line/assertion) — show only for failures
+                    [ "$in_failure" = true ] && printf "        %s\n" "${line#"# "}"
+                    ;;
+            esac
+        done < <(bats --tap "$BATS_DIR" 2>&1)
+
+        echo ""
+        if [ "$bats_fail" -eq 0 ]; then
+            pass "$bats_pass/$bats_total test(s) passed"
         else
-            test_count=$(echo "$bats_output" | grep -cE "^(ok|not ok)" || true)
-            pass "$test_count bats test(s) passed"
+            fail "$bats_fail test(s) FAILED  ($bats_pass passed, $bats_skip skipped of $bats_total)"
         fi
     else
         warn "No .bats files found in $BATS_DIR"
