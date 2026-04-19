@@ -124,14 +124,12 @@ Usage: ubuntu-prep-setup.sh [OPTIONS]
 OPTIONS
   --dry-run, -n   Show what would be installed for your selections and exit.
                   Safe: makes no changes, requires no sudo.
-  --headless      Run non-interactively with sensible defaults.
   --resume        Resume after reboot checkpoint (NVIDIA driver install).
   --help, -h      Show this help and exit.
 
 EXAMPLES
-  ubuntu-prep-setup.sh                # Interactive install (normal usage)
-  ubuntu-prep-setup.sh --dry-run      # Preview the plan — no changes made
-  ubuntu-prep-setup.sh --headless     # Non-interactive install with defaults
+  ubuntu-prep-setup.sh           # Interactive install (normal usage)
+  ubuntu-prep-setup.sh --dry-run # Preview the plan — no changes made
 
 For configuration details, see README.md or
 https://github.com/chsbusch-dot/Ubuntu-AI-Tools-Install
@@ -621,6 +619,8 @@ determine_target_user() {
 
         if id "$TARGET_USER" &>/dev/null; then
             print_info "Target user '$TARGET_USER' already exists."
+        elif [[ "$DRY_RUN" == "true" ]]; then
+            print_info "Dry run: would create standard user '$TARGET_USER' (sudo adduser)."
         else
             print_info "Creating user '$TARGET_USER'..."
             sudo adduser --gecos "" "$TARGET_USER"
@@ -5083,23 +5083,23 @@ show_menu() {
 
 dry_run_plan_for() {
     case "$1" in
-        0)  echo "apt-get update && apt-get full-upgrade -y" ;;
-        1)  echo "apt install zsh git tmux micro curl; install Oh My Zsh; chsh to zsh for $TARGET_USER" ;;
-        2)  echo "apt install python3 python3-pip python3-venv python3-full" ;;
-        3)  echo "Add Docker apt repo; install docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin; add $TARGET_USER to docker group" ;;
-        4)  echo "Install NVM (curl script) + Node LTS + npm for $TARGET_USER" ;;
-        5)  echo "Install Homebrew to /home/linuxbrew/.linuxbrew (requires Node first)" ;;
-        6)  echo "npm install -g @google/gemini-cli (requires NVM/Node)" ;;
-        7)  echo "Download pinned NVIDIA driver .run installer; disable nouveau; run installer; reboot" ;;
-        8)  echo "snap install btop (or apt install btop as fallback)" ;;
-        9)  echo "apt install nvtop" ;;
+        0) echo "apt-get update && apt-get full-upgrade -y" ;;
+        1) echo "apt install zsh git tmux micro curl; install Oh My Zsh; chsh to zsh for $TARGET_USER" ;;
+        2) echo "apt install python3 python3-pip python3-venv python3-full" ;;
+        3) echo "Add Docker apt repo; install docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin; add $TARGET_USER to docker group" ;;
+        4) echo "Install NVM (curl script) + Node LTS + npm for $TARGET_USER" ;;
+        5) echo "Install Homebrew to /home/linuxbrew/.linuxbrew (requires Node first)" ;;
+        6) echo "npm install -g @google/gemini-cli (requires NVM/Node)" ;;
+        7) echo "Download pinned NVIDIA driver .run installer; disable nouveau; run installer; reboot" ;;
+        8) echo "snap install btop (or apt install btop as fallback)" ;;
+        9) echo "apt install nvtop" ;;
         10) echo "Add NVIDIA CUDA apt repo; install cuda-toolkit-13; write /etc/profile.d/cuda.sh" ;;
         11) echo "apt install gcc (needed by CUDA)" ;;
         12) echo "Add NVIDIA container toolkit apt repo; install nvidia-container-toolkit; configure Docker runtime" ;;
         13) echo "Download cuDNN 9.21.0 local .deb installer; apt install cudnn9-cuda-13; write /etc/profile.d/cudnn.sh" ;;
         14) echo "Install Ollama (curl script) and/or llama.cpp (build from source with CUDA); optionally run Open-WebUI / LibreChat via Docker Compose; create systemd services" ;;
         15) echo "npm install -g openclaw@beta; run 'openclaw onboard'; install openclaw-gateway systemd service; patch config to route to llama.cpp" ;;
-        *)  echo "(no plan available for index $1)" ;;
+        *) echo "(no plan available for index $1)" ;;
     esac
 }
 
