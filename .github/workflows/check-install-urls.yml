@@ -1,0 +1,65 @@
+name: Install-URL Reachability Check
+
+on:
+  schedule:
+    # Run daily at 08:10 UTC (staggered from the other two checks)
+    - cron: '10 8 * * *'
+  workflow_dispatch:
+  # Also run on any PR that touches the script or the checker itself
+  pull_request:
+    paths:
+      - 'ubuntu-prep-setup.sh'
+      - 'tests/check-install-urls.sh'
+      - '.github/workflows/check-install-urls.yml'
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-urls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check reachability of external install URLs
+        run: bash tests/check-install-urls.sh
+
+      - name: Create issue on failure (scheduled runs only)
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Skip if an open install-urls issue already exists
+          OPEN=$(gh issue list --repo "$GH_REPO" \
+                   --label install-urls --state open --json number --jq 'length')
+          if [ "${OPEN:-0}" -gt 0 ]; then
+            echo "Open issue already exists — skipping creation."
+            exit 0
+          fi
+
+          BODY="One or more upstream install URLs referenced in "
+          BODY+="\`ubuntu-prep-setup.sh\` returned a non-2xx/3xx status."
+          BODY+=$'\n\n'
+          BODY+="This usually means a vendor moved or renamed a binary "
+          BODY+="(NVIDIA driver, cuDNN version, Docker repo, etc.) — "
+          BODY+="real installs will break until the script is updated."
+          BODY+=$'\n\n'
+          BODY+="**Action needed:** See the [workflow run](${RUN_URL}) "
+          BODY+="for which URLs failed, then update the corresponding "
+          BODY+="version pin or URL template in the script."
+          BODY+=$'\n\n'
+          BODY+="Common causes:"$'\n'
+          BODY+="- NVIDIA rotated the pinned driver version (update \`PINNED_DRIVER_VERSION\`)"$'\n'
+          BODY+="- cuDNN bumped to a new release (update \`CUDNN_VERSION\` in script + workflow)"$'\n'
+          BODY+="- Ubuntu repo layout changed (check \`CUDA_UBUNTU_VERSION\`)"$'\n'
+          BODY+="- NodeSource deprecated setup_22.x"$'\n'
+          BODY+="- Upstream GitHub repo archived/renamed"
+
+          gh issue create \
+            --repo "$GH_REPO" \
+            --title "⚠️ Install URL reachability check failed" \
+            --label "install-urls" \
+            --body "$BODY"
