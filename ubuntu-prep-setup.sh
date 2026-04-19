@@ -136,6 +136,11 @@ OPTIONS
                            BASE_URL is an scp-compatible path prefix.
                            Example: --local-mirror chris@192.168.1.135:/home/chris
                            Models go in:  chris@192.168.1.135:/home/chris/models/
+                           Security: the mirror host's SSH fingerprint is accepted on
+                           first use (StrictHostKeyChecking=accept-new). This is
+                           trust-on-first-use — only pass --local-mirror when you
+                           control the mirror host and the network path to it. The
+                           mirror can serve arbitrary model weights and repo contents.
   --resume                 Resume after reboot checkpoint (NVIDIA driver install).
   --help, -h               Show this help and exit.
 
@@ -698,11 +703,24 @@ determine_target_user() {
             sudo adduser --gecos "" "$TARGET_USER"
             print_success "Standard user '$TARGET_USER' created successfully."
         fi
-        # Get home directory path correctly, even for non-standard home dirs
-        TARGET_USER_HOME=$(eval echo "~$TARGET_USER")
+        # Get home directory path correctly, even for non-standard home dirs.
+        # Prefer getent over `eval echo ~$TARGET_USER` — eval re-parses the
+        # expansion, so a malicious username (already blocked by the regex
+        # above, but defense in depth) can never trigger a second shell pass.
+        TARGET_USER_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+        if [[ -z "$TARGET_USER_HOME" ]]; then
+            TARGET_USER_HOME="/home/$TARGET_USER"
+        fi
     else
         TARGET_USER=$USER
         TARGET_USER_HOME=$HOME
+    fi
+    # Defensive: every downstream sudo/systemd/path operation interpolates
+    # TARGET_USER, so reject obvious junk (spaces, shell metacharacters, empty)
+    # no matter which branch set it.
+    if [[ ! "$TARGET_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+        echo "❌ TARGET_USER '$TARGET_USER' is not a valid POSIX username (^[a-z_][a-z0-9_-]{0,31}\$)." >&2
+        exit 1
     fi
     print_info "All user-specific files will be installed for user '$TARGET_USER' in '$TARGET_USER_HOME'."
 }
@@ -903,11 +921,20 @@ EOF
                             fi
 
                             # Use awk for replacement — immune to all sed metacharacters
-                            # (backslashes, pipes, ampersands, slashes in the value)
+                            # (backslashes, pipes, ampersands, slashes in the value).
+                            # We also escape the four chars that matter inside a bash
+                            # double-quoted string (\ " $ `) so the written line is safe
+                            # when `.env.secrets` is sourced.
                             local secrets_file="$TARGET_USER_HOME/.env.secrets"
                             local tmp_secrets
                             tmp_secrets=$(sudo mktemp)
                             sudo awk -v key="$key_name" -v val="$key_value" '
+                                BEGIN {
+                                    gsub(/\\/, "\\\\", val)
+                                    gsub(/"/,  "\\\"", val)
+                                    gsub(/\$/, "\\$",  val)
+                                    gsub(/`/,  "\\`",  val)
+                                }
                                 $0 ~ "^# export " key "=" { print "export " key "=\"" val "\""; next }
                                 { print }
                             ' "$secrets_file" | sudo tee "$tmp_secrets" >/dev/null
@@ -1099,7 +1126,8 @@ install_nvm_node() {
     print_info "Installing the latest LTS version of Node.js..."
     # Explicitly set NVM_DIR using the exact target path and source nvm.sh within the subshell.
     # We use double quotes to inject TARGET_USER_HOME directly, avoiding any $HOME resolution issues with sudo.
-    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+    local nvm_cmd
+    nvm_cmd=$(nvm_env_prelude)
     sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && $nvm_cmd; nvm install --lts; nvm install-latest-npm"
 
     print_info "Verifying NVM configuration in shell files..."
@@ -1172,7 +1200,8 @@ EOF
 # 6. Install Google Gemini CLI
 install_gemini_cli() {
     print_header "Installing Google Gemini CLI"
-    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+    local nvm_cmd
+    nvm_cmd=$(nvm_env_prelude)
 
     print_info "Installing Gemini CLI via NPM..."
     sudo -u "$TARGET_USER" bash -c "$nvm_cmd; npm install -g @google/gemini-cli"
@@ -1242,8 +1271,12 @@ install_nvidia_driver() {
         local _drv_url="${NVIDIA_RTX_DRIVER_URL:-https://us.download.nvidia.com/XFree86/Linux-x86_64/595.58.03/NVIDIA-Linux-x86_64-595.58.03.run}"
         local _drv_ver
         _drv_ver=$(basename "$_drv_url" .run | grep -oP '[\d.]+$')
+        # Stage the installer in a private, root-owned mktemp dir so a local
+        # attacker can't pre-create a symlink at a predictable /tmp path.
+        local _drv_dir
+        _drv_dir=$(sudo mktemp -d -t nvidia-drv.XXXXXXXXXX)
         local _drv_file
-        _drv_file="/tmp/$(basename "$_drv_url")"
+        _drv_file="$_drv_dir/$(basename "$_drv_url")"
 
         if [[ -n "${NVIDIA_RTX_DRIVER_URL:-}" ]]; then
             print_info "Using driver URL from .env.secrets: $_drv_url"
@@ -1271,13 +1304,9 @@ NOUVEOF
         fi
 
         # Download the .run installer
-        if [[ ! -f "$_drv_file" ]]; then
-            print_info "Downloading NVIDIA driver ${_drv_ver}..."
-            wget -q --show-progress -O "$_drv_file" "$_drv_url"
-            chmod +x "$_drv_file"
-        else
-            print_info "Installer already present: $_drv_file"
-        fi
+        print_info "Downloading NVIDIA driver ${_drv_ver}..."
+        sudo wget -q --show-progress -O "$_drv_file" "$_drv_url"
+        sudo chmod +x "$_drv_file"
 
         # Run unattended install
         print_info "Running NVIDIA installer (silent)..."
@@ -1289,6 +1318,7 @@ NOUVEOF
             --no-wine-files \
             --dkms
 
+        sudo rm -rf "$_drv_dir"
         print_success "NVIDIA driver ${_drv_ver} installed."
 
         # ── ESXi PCIe passthrough reminder ───────────────────────────────────
@@ -1324,11 +1354,14 @@ NOUVEOF
     local env_driver_url=""
     local env_token_url=""
 
-    # Read secrets file if it exists to retrieve URL and Auth, using sudo to bypass strict home directory permissions
+    # Read secrets file if it exists to retrieve URL and Auth. We pass
+    # TARGET_USER_HOME as a positional argument to the sub-shell (rather than
+    # string-interpolating it into a `bash -c` body) so a pathological home
+    # directory can't alter the command being run.
     if sudo test -f "$TARGET_USER_HOME/.env.secrets"; then
-        env_driver_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DRIVER_URL\"" | tr -d '\r')
-        env_token_url=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_TOKEN_URL\"" | tr -d '\r')
-        download_auth=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$NVIDIA_VGPU_DOWNLOAD_AUTH\"" | tr -d '\r')
+        env_driver_url=$(sudo bash -c 'source "$1/.env.secrets" 2>/dev/null; printf "%s" "$NVIDIA_VGPU_DRIVER_URL"' _ "$TARGET_USER_HOME" | tr -d '\r')
+        env_token_url=$(sudo bash -c 'source "$1/.env.secrets" 2>/dev/null; printf "%s" "$NVIDIA_VGPU_TOKEN_URL"' _ "$TARGET_USER_HOME" | tr -d '\r')
+        download_auth=$(sudo bash -c 'source "$1/.env.secrets" 2>/dev/null; printf "%s" "$NVIDIA_VGPU_DOWNLOAD_AUTH"' _ "$TARGET_USER_HOME" | tr -d '\r')
     fi
 
     # Probe the driver URL early: if reachable, proceed automatically — no prompt needed.
@@ -1588,9 +1621,12 @@ install_cuda_toolkit() {
     print_info "Installing CUDA..."
     # Make CUDA repo installation dynamic based on Ubuntu version
     UBUNTU_VERSION=$(lsb_release -sr | tr -d '.')
-    wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
-    sudo dpkg -i cuda-keyring_1.1-1_all.deb
-    rm cuda-keyring_1.1-1_all.deb
+    local cuda_keyring_dir cuda_keyring_deb
+    cuda_keyring_dir=$(mktemp -d -t cuda-keyring.XXXXXXXXXX)
+    cuda_keyring_deb="$cuda_keyring_dir/cuda-keyring_1.1-1_all.deb"
+    wget -O "$cuda_keyring_deb" "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
+    sudo dpkg -i "$cuda_keyring_deb"
+    rm -rf "$cuda_keyring_dir"
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get -y install cuda-toolkit
 
@@ -1699,23 +1735,31 @@ install_cudnn() {
     local ubuntu_ver
     ubuntu_ver=$(lsb_release -rs 2>/dev/null | tr -d '.') # e.g. "2404"
     local cudnn_ver="${CUDNN_VERSION:-9.21.0}"
+    cudnn_ver="${cudnn_ver//[^0-9.]/}" # strip non-semver chars before sudo interpolation
     local cudnn_deb_url="${CUDNN_LOCAL_DEB_URL:-https://developer.download.nvidia.com/compute/cudnn/${cudnn_ver}/local_installers/cudnn-local-repo-ubuntu${ubuntu_ver}-${cudnn_ver}_1.0-1_amd64.deb}"
-    local cudnn_deb_file="/tmp/cudnn-local-repo.deb"
+    # mktemp dir avoids a symlink attack on a predictable /tmp/cudnn-local-repo.deb.
+    local cudnn_dir cudnn_deb_file
+    cudnn_dir=$(mktemp -d -t cudnn-local-repo.XXXXXXXXXX)
+    cudnn_deb_file="$cudnn_dir/cudnn-local-repo.deb"
 
     print_info "Downloading cuDNN local repo installer (${cudnn_ver})..."
     if ! curl_with_retry -fsSL -o "$cudnn_deb_file" "$cudnn_deb_url"; then
         echo "❌ Failed to download cuDNN installer from: $cudnn_deb_url"
         echo "   Set CUDNN_LOCAL_DEB_URL in ~/.env.secrets to override."
+        rm -rf "$cudnn_dir"
         return 1
     fi
 
     print_info "Registering cuDNN local apt repository..."
+    wait_for_apt_lock
     sudo dpkg -i "$cudnn_deb_file"
-    # Copy the keyring installed by the .deb into the system keyring directory
-    sudo cp /var/cudnn-local-repo-ubuntu"${ubuntu_ver}"-"${cudnn_ver}"/cudnn-*-keyring.gpg \
-        /usr/share/keyrings/ 2>/dev/null || true
+    # Copy the keyring installed by the .deb into the system keyring directory.
+    # Run cp as root via bash -c so the glob expands under root (the source dir
+    # is root-only readable; otherwise the glob stays literal and cp fails).
+    sudo bash -c "cp /var/cudnn-local-repo-ubuntu${ubuntu_ver}-${cudnn_ver}/cudnn-*-keyring.gpg /usr/share/keyrings/"
+    wait_for_apt_lock
     sudo apt-get update -qq
-    rm -f "$cudnn_deb_file"
+    rm -rf "$cudnn_dir"
 
     # ── Install CUDA-versioned cuDNN package ──────────────────────────────────
     # Try the detected CUDA version first; fall back to cuda-12 if unavailable.
@@ -1725,6 +1769,7 @@ install_cudnn() {
         cudnn_pkg="cudnn9-cuda-12"
     fi
     print_info "Installing ${cudnn_pkg}..."
+    wait_for_apt_lock
     sudo DEBIAN_FRONTEND=noninteractive apt-get -y install "$cudnn_pkg"
 
     # ── Export LD_LIBRARY_PATH system-wide ───────────────────────────────────
@@ -1762,6 +1807,31 @@ get_llama_runtime_pid_path() {
 
 get_llama_runtime_log_path() {
     echo "$TARGET_USER_HOME/.cache/llama-server.log"
+}
+
+# Guard against injecting a single quote into the single-quoted bash -c body of
+# the llama-server systemd ExecStart line. hf_args/llama_host_args are built
+# from our own code paths (build_llama_hf_args + LLAMA_* globals), so a quote
+# would indicate a corrupted value — fail loudly rather than write a unit file
+# that shellparses into something unintended.
+validate_systemd_execstart_args() {
+    local name="$1" value="$2"
+    if [[ "$value" == *\'* ]]; then
+        echo "❌ Refusing to write llama-server unit: ${name} contains a single quote." >&2
+        echo "   Value: ${value}" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Emits the `source ~/.nvm/nvm.sh` prelude for the target user so Node-based
+# tooling (openclaw, npm, npx) is on PATH inside `sudo -u "$TARGET_USER" bash -c`.
+# Centralising this avoids 8+ copies of the same literal scattered through the
+# script and keeps the TARGET_USER_HOME interpolation in one place.
+nvm_env_prelude() {
+    # shellcheck disable=SC2016  # $NVM_DIR is intentionally unexpanded — the caller's shell resolves it.
+    printf 'export NVM_DIR=%q; [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"' \
+        "$TARGET_USER_HOME/.nvm"
 }
 
 get_librechat_port() {
@@ -2044,7 +2114,7 @@ detect_local_ai_components() {
     # Binary lives in the NVM bin directory, not ~/.local/bin
     local oc_bin_detected
     oc_bin_detected=$(sudo -u "$TARGET_USER" bash -c \
-        "export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"; command -v openclaw 2>/dev/null || true" 2>/dev/null || true)
+        "$(nvm_env_prelude); command -v openclaw 2>/dev/null || true" 2>/dev/null || true)
     if [[ -n "$oc_bin_detected" ]] || sudo test -f "$TARGET_USER_HOME/.local/bin/openclaw"; then openclaw_binary=true; fi
     if sudo test -d "$TARGET_USER_HOME/.openclaw"; then openclaw_config=true; fi
     if [[ "$openclaw_binary" == true || "$openclaw_config" == true ]]; then openclaw_partial=true; fi
@@ -2187,7 +2257,7 @@ verify_openclaw_component() {
 
     oc_port=$(get_openclaw_port)
     local oc_bin
-    oc_bin=$(sudo -u "$TARGET_USER" bash -c "export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"; command -v openclaw 2>/dev/null || true")
+    oc_bin=$(sudo -u "$TARGET_USER" bash -c "$(nvm_env_prelude); command -v openclaw 2>/dev/null || true")
     if [[ -z "$oc_bin" ]] && ! sudo test -f "$TARGET_USER_HOME/.local/bin/openclaw"; then
         echo "❌ OpenClaw verification failed: binary is missing."
         return 1
@@ -2298,14 +2368,22 @@ download_hf_model_with_progress() {
         hf_token=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$HF_TOKEN\"" | tr -d '\r')
     fi
 
-    # If no specific file, query HF API — prefer Q4_K_M, fall back to first gguf
+    # If no specific file, query HF API — prefer Q4_K_M, fall back to first gguf.
+    # We capture the HTTP status so we can give a useful hint when the repo is
+    # gated (401/403) or missing (404) instead of silently falling through.
     if [[ -z "$hf_file" ]]; then
         print_info "Querying HuggingFace API for GGUF files in '$hf_repo'..." >&2
-        local api_response=""
-        if [[ -n "$hf_token" ]]; then
-            api_response=$(curl -sf -H "Authorization: Bearer $hf_token" "https://huggingface.co/api/models/$hf_repo" 2>/dev/null || true)
-        else
-            api_response=$(curl -sf "https://huggingface.co/api/models/$hf_repo" 2>/dev/null || true)
+        local api_response="" api_http=""
+        local api_url="https://huggingface.co/api/models/$hf_repo"
+        local curl_args=(-s -L -o /dev/null -w '%{http_code}')
+        [[ -n "$hf_token" ]] && curl_args+=(-H "Authorization: Bearer $hf_token")
+        api_http=$(curl "${curl_args[@]}" "$api_url" 2>/dev/null || echo "000")
+        if [[ "$api_http" == "200" ]]; then
+            if [[ -n "$hf_token" ]]; then
+                api_response=$(curl -sfL -H "Authorization: Bearer $hf_token" "$api_url" 2>/dev/null || true)
+            else
+                api_response=$(curl -sfL "$api_url" 2>/dev/null || true)
+            fi
         fi
         hf_file=$(echo "$api_response" | jq -r '.siblings[].rfilename | select(endswith(".gguf"))' 2>/dev/null | grep -i "q4_k_m" | head -1 || true)
         if [[ -z "$hf_file" ]]; then
@@ -2314,6 +2392,20 @@ download_hf_model_with_progress() {
     fi
 
     if [[ -z "$hf_file" ]]; then
+        case "${api_http:-}" in
+            401 | 403)
+                if [[ -n "$hf_token" ]]; then
+                    echo "❌ HuggingFace returned HTTP ${api_http} for '$hf_repo' — token lacks access to this gated/private repo." >&2
+                else
+                    echo "❌ '$hf_repo' is gated or private — set HF_TOKEN in ~/.env.secrets and accept the repo's licence on huggingface.co." >&2
+                fi
+                return 1
+                ;;
+            404)
+                echo "❌ HuggingFace returned 404 for '$hf_repo' — repo does not exist." >&2
+                return 1
+                ;;
+        esac
         echo "⚠️  Could not resolve GGUF filename — llama.cpp will download automatically on first start." >&2
         return 0
     fi
@@ -2348,14 +2440,19 @@ download_hf_model_with_progress() {
     echo -e "  Repo : \e[1;36m$hf_repo\e[0m" >&2
     echo -e "  File : \e[1;36m$hf_file\e[0m" >&2
 
+    # Pass token via env + URLs via positional args so no user-controlled
+    # string ever undergoes shell evaluation. Prevents command injection via
+    # malicious HF_TOKEN / repo / filename.
     local dl_status=0
     if [[ -n "$hf_token" ]]; then
-        sudo -u "$TARGET_USER" bash -c \
-            "curl -L --progress-bar --fail -H 'Authorization: Bearer $hf_token' -o '$dest_path' '$download_url'" ||
+        sudo -u "$TARGET_USER" env HF_TOKEN="$hf_token" bash -c \
+            'curl -L --progress-bar --fail -H "Authorization: Bearer $HF_TOKEN" -o "$1" "$2"' \
+            _ "$dest_path" "$download_url" ||
             dl_status=$?
     else
         sudo -u "$TARGET_USER" bash -c \
-            "curl -L --progress-bar --fail -o '$dest_path' '$download_url'" ||
+            'curl -L --progress-bar --fail -o "$1" "$2"' \
+            _ "$dest_path" "$download_url" ||
             dl_status=$?
     fi
     echo "" >&2
@@ -3736,6 +3833,12 @@ install_local_llm() {
                     sudo rm -f "$llama_pid_file"
                 fi
 
+                if ! validate_systemd_execstart_args "hf_args" "$hf_args" ||
+                    ! validate_systemd_execstart_args "llama_host_args" "$llama_host_args"; then
+                    record_component_outcome "llama.cpp" "$LLAMA_COMPONENT_ACTION" "failed"
+                    return 1
+                fi
+
                 # shellcheck disable=SC2090
                 sudo tee /etc/systemd/system/llama-server.service >/dev/null <<SERVICEEOF
 [Unit]
@@ -3794,8 +3897,15 @@ SERVICEEOF
             local allowed_origins="*"
             if sudo test -f "$TARGET_USER_HOME/.env.secrets"; then
                 local env_origins
-                env_origins=$(sudo bash -c "source \"$TARGET_USER_HOME/.env.secrets\" 2>/dev/null && echo \"\$OLLAMA_ALLOWED_ORIGINS\"" | tr -d '\r')
+                env_origins=$(sudo bash -c 'source "$1/.env.secrets" 2>/dev/null; printf "%s" "$OLLAMA_ALLOWED_ORIGINS"' _ "$TARGET_USER_HOME" | tr -d '\r')
                 if [[ -n "$env_origins" ]]; then allowed_origins="$env_origins"; fi
+            fi
+            # A stray " in OLLAMA_ALLOWED_ORIGINS would break the quoted
+            # Environment= line; reject such values rather than write a
+            # malformed unit file.
+            if [[ "$allowed_origins" == *\"* || "$allowed_origins" == *$'\n'* ]]; then
+                echo "❌ OLLAMA_ALLOWED_ORIGINS contains an illegal character (\" or newline); using '*' instead." >&2
+                allowed_origins="*"
             fi
             echo -e "[Service]\nEnvironment=\"OLLAMA_HOST=0.0.0.0:11434\"\nEnvironment=\"OLLAMA_ORIGINS=$allowed_origins\"" | sudo tee /etc/systemd/system/ollama.service.d/override.conf >/dev/null
             sudo systemctl daemon-reload
@@ -3926,12 +4036,26 @@ SERVICEEOF
         sudo systemctl is-enabled docker &>/dev/null || sudo systemctl enable --now docker
 
         print_info "Cloning LibreChat repository..."
-        local _librechat_clone_url="https://github.com/danny-avila/LibreChat.git"
+        local _librechat_public_url="https://github.com/danny-avila/LibreChat.git"
+        local _librechat_clone_url="$_librechat_public_url"
+        local _librechat_cloned=false
         if [[ -n "$LOCAL_MIRROR_BASE" ]]; then
             _librechat_clone_url="${LOCAL_MIRROR_BASE}/LibreChat.git"
             print_info "Local mirror mode — cloning LibreChat from ${_librechat_clone_url}"
+            if sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new' git clone \"$_librechat_clone_url\"" 2>/dev/null; then
+                _librechat_cloned=true
+            else
+                print_info "LAN mirror clone failed (likely no SSH key for $TARGET_USER) — falling back to GitHub."
+                sudo -u "$TARGET_USER" rm -rf "$TARGET_USER_HOME/LibreChat" 2>/dev/null || true
+            fi
         fi
-        sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && git clone \"$_librechat_clone_url\""
+        if [[ "$_librechat_cloned" != true ]]; then
+            if ! sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME\" && git clone \"$_librechat_public_url\""; then
+                echo "❌ git clone failed for LibreChat from $_librechat_public_url"
+                record_component_outcome "LibreChat" "$LIBRECHAT_COMPONENT_ACTION" "failed"
+                return 1
+            fi
+        fi
 
         print_info "Configuring LibreChat environment..."
         sudo -u "$TARGET_USER" bash -c "cd \"$TARGET_USER_HOME/LibreChat\" && cp .env.example .env"
@@ -4058,7 +4182,8 @@ install_openclaw() {
         return 1
     fi
 
-    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+    local nvm_cmd
+    nvm_cmd=$(nvm_env_prelude)
 
     # Check if node is installed for the target user.
     if ! sudo -u "$TARGET_USER" bash -c "$nvm_cmd; command -v node" &>/dev/null; then
@@ -4163,10 +4288,19 @@ EOF
         # can be undefined, crashing the entire process before the config
         # file is written.  Separating them lets onboard write the config
         # even if the daemon step fails.
-        openclaw onboard || true;
+        #
+        # Capture onboard's exit code so we can surface it explicitly when
+        # the config-file check below fails — the `|| true` keeps the
+        # outer `set -e`/`su -c` from bailing before we inspect state.
+        openclaw onboard;
+        _onboard_rc=$?;
 
         # Only attempt daemon install if onboard actually wrote a config
         if [ -f "$HOME/.openclaw/openclaw.json" ]; then
+            if [ "$_onboard_rc" -ne 0 ]; then
+                echo "";
+                echo "⚠️  openclaw onboard exited $_onboard_rc but wrote a config — continuing.";
+            fi
             echo "";
             echo "✅ OpenClaw onboarding completed — config written.";
             echo "Installing OpenClaw daemon...";
@@ -4176,7 +4310,7 @@ EOF
             };
         else
             echo "";
-            echo "❌ OpenClaw onboarding did not write a config file.";
+            echo "❌ OpenClaw onboarding did not write a config file (onboard exit $_onboard_rc).";
             echo "   Run 'openclaw onboard' manually later as the '$USER' user.";
             exit 1;
         fi;
@@ -4488,7 +4622,8 @@ EOF
         # ── Item 8: Allow Insecure Connections ──────────────────────────────
         if [[ ${sec_selections[7]} -eq 1 ]]; then
             print_info "Enabling insecure auth for Control UI..."
-            local _oc_nvm_env="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"; export PATH=\"$TARGET_USER_HOME/.local/bin:\$PATH\""
+            local _oc_nvm_env
+            _oc_nvm_env="$(nvm_env_prelude); export PATH=\"$TARGET_USER_HOME/.local/bin:\$PATH\""
             sudo -u "$TARGET_USER" bash -c "$_oc_nvm_env; openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true" 2>/dev/null || true
             sudo -u "$TARGET_USER" bash -c "$_oc_nvm_env; openclaw config set gateway.controlUi.allowInsecureAuth true" 2>/dev/null || true
             print_success "Insecure auth enabled (dangerouslyDisableDeviceAuth + allowInsecureAuth)."
@@ -4539,7 +4674,8 @@ EOF
         # ── Item 5: Deep Security Audit ──────────────────────────────────────
         if [[ ${sec_selections[4]} -eq 1 ]]; then
             print_info "Running OpenClaw Deep Security Audit..."
-            local _oc_audit_env="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"; export PATH=\"$TARGET_USER_HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:\$PATH\""
+            local _oc_audit_env
+            _oc_audit_env="$(nvm_env_prelude); export PATH=\"$TARGET_USER_HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:\$PATH\""
             sudo -u "$TARGET_USER" bash -c "$_oc_audit_env; openclaw security audit --deep" ||
                 echo -e "⚠️ \e[1;33mAudit returned warnings/errors, please review.\e[0m"
             echo ""
@@ -4732,7 +4868,8 @@ _render_summary() {
     _item() { if [[ $is_file -eq 1 ]]; then echo "$1"; else print_info "$1"; fi; }
     _subheader() { if [[ $is_file -eq 1 ]]; then echo "  -> $1"; else echo -e "  \e[1;36m-> $1\e[0m"; fi; }
 
-    local nvm_cmd="export NVM_DIR=\"$TARGET_USER_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
+    local nvm_cmd
+    nvm_cmd=$(nvm_env_prelude)
     local brew_cmd="[ -f /home/linuxbrew/.linuxbrew/bin/brew ] && eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""
     local lan_ip
     lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -5298,6 +5435,11 @@ edit_llama_server_parameters() {
     print_info "Stopping llama-server…"
     sudo systemctl stop llama-server 2>/dev/null || true
 
+    if ! validate_systemd_execstart_args "hf_args" "$hf_args" ||
+        ! validate_systemd_execstart_args "llama_host_args" "$llama_host_args"; then
+        return 1
+    fi
+
     local env_cuda=""
     [[ "$is_cuda" == "y" ]] && env_cuda="Environment=\"LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64\""
 
@@ -5337,7 +5479,7 @@ EDITEOF
         local tmp_oc
         tmp_oc=$(sudo mktemp)
         local oc_jq=".agents.defaults.compaction.reserveTokensFloor = 20000"
-        oc_jq="$oc_jq | (.providers // {}) as \$p | if (\$p | keys | map(select(startswith(\"custom-127\"))) | length) > 0 then (.providers[(.providers | keys | map(select(startswith(\"custom-127\"))))[0]].models[0].contextWindow = $oc_ctx) else . end"
+        oc_jq="$oc_jq | (.models.providers // {}) as \$p | if (\$p | keys | map(select(startswith(\"custom-127\"))) | length) > 0 then (.models.providers[(.models.providers | keys | map(select(startswith(\"custom-127\"))))[0]].models[0].contextWindow = $oc_ctx) else . end"
         local oc_out
         oc_out=$(sudo jq "$oc_jq" "$openclaw_config") || true
         if [[ -n "$oc_out" ]] && echo "$oc_out" | jq empty 2>/dev/null; then
@@ -5545,6 +5687,7 @@ main() {
         EXPOSE_OPENCLAW="${RESUME_EXPOSE_OPENCLAW:-n}"
         OPENCLAW_PORT="${RESUME_OPENCLAW_PORT:-18789}"
         LOCAL_MIRROR_BASE="${RESUME_LOCAL_MIRROR_BASE:-}"
+        ENABLE_UFW_AUTOMATICALLY="${RESUME_ENABLE_UFW_AUTOMATICALLY:-n}"
 
         echo -e "  Restored selections: [${MASTER_SELECTIONS[*]}]"
         echo -e "  Already completed:   [${MASTER_INSTALLED_STATE[*]}]"
@@ -6298,61 +6441,71 @@ main() {
 # Also records all config variables that drive install functions.
 save_resume_state() {
     sudo mkdir -p "$(dirname "$RESUME_STATE_FILE")"
-    sudo tee "$RESUME_STATE_FILE" >/dev/null <<EOF
-# ubuntu-prep-setup.sh resume state — written $(date)
-# Sourced by the script when invoked with --resume.
 
-RESUME_SELECTIONS="${MASTER_SELECTIONS[*]}"
-RESUME_COMPLETED="${MASTER_INSTALLED_STATE[*]}"
-RESUME_ACTIVE="${ACTIVE_INDICES[*]}"
+    # Every persisted value is shell-quoted with printf %q so a value
+    # containing spaces, quotes, backslashes, or $ survives a source-back
+    # intact. Bare NAME="…" interpolation breaks if the value contains " or \.
+    local tmp
+    tmp=$(mktemp)
+    {
+        printf '# ubuntu-prep-setup.sh resume state — written %s\n' "$(date)"
+        printf '# Sourced by the script when invoked with --resume.\n\n'
 
-# User / environment
-RESUME_TARGET_USER="${TARGET_USER}"
-RESUME_TARGET_USER_HOME="${TARGET_USER_HOME}"
-RESUME_IS_DIFFERENT_USER="${IS_DIFFERENT_USER}"
-RESUME_HAS_NVIDIA_GPU="${HAS_NVIDIA_GPU}"
-RESUME_NVIDIA_DRIVER_TYPE="${NVIDIA_DRIVER_TYPE:-}"
+        printf 'RESUME_SELECTIONS=%q\n' "${MASTER_SELECTIONS[*]}"
+        printf 'RESUME_COMPLETED=%q\n'  "${MASTER_INSTALLED_STATE[*]}"
+        printf 'RESUME_ACTIVE=%q\n'     "${ACTIVE_INDICES[*]}"
 
-# LLM config
-RESUME_LLM_BACKEND_CHOICE="${LLM_BACKEND_CHOICE:-}"
-RESUME_FRONTEND_BACKEND_TARGET="${FRONTEND_BACKEND_TARGET:-}"
-RESUME_LLAMA_COMPONENT_ACTION="${LLAMA_COMPONENT_ACTION:-skip}"
-RESUME_OLLAMA_COMPONENT_ACTION="${OLLAMA_COMPONENT_ACTION:-skip}"
-RESUME_OPENWEBUI_COMPONENT_ACTION="${OPENWEBUI_COMPONENT_ACTION:-skip}"
-RESUME_LIBRECHAT_COMPONENT_ACTION="${LIBRECHAT_COMPONENT_ACTION:-skip}"
-RESUME_OPENCLAW_COMPONENT_ACTION="${OPENCLAW_COMPONENT_ACTION:-skip}"
-RESUME_LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-65536}"
-RESUME_LOAD_DEFAULT_MODEL="${LOAD_DEFAULT_MODEL:-n}"
-RESUME_RUN_LLAMA_BENCH="${RUN_LLAMA_BENCH:-n}"
-RESUME_INSTALL_LLAMA_SERVICE="${INSTALL_LLAMA_SERVICE:-n}"
-RESUME_EXPOSE_LLM_ENGINE="${EXPOSE_LLM_ENGINE:-n}"
-RESUME_INSTALL_OPENWEBUI="${INSTALL_OPENWEBUI:-n}"
-RESUME_INSTALL_LIBRECHAT="${INSTALL_LIBRECHAT:-n}"
-RESUME_LLAMACPP_MODEL_REPO="${LLAMACPP_MODEL_REPO:-}"
-RESUME_OLLAMA_PULL_MODEL="${OLLAMA_PULL_MODEL:-}"
-RESUME_LLM_DEFAULT_MODEL_CHOICE="${LLM_DEFAULT_MODEL_CHOICE:-}"
-RESUME_SELECTED_MODEL_REPO="${SELECTED_MODEL_REPO:-}"
-RESUME_LLAMA_BUILD_VARIANT="${LLAMA_BUILD_VARIANT:-}"
-RESUME_LLAMA_VRAM_TIER="${LLAMA_VRAM_TIER:-}"
-RESUME_LLAMA_NGL="${LLAMA_NGL:-}"
-RESUME_LLAMA_CACHE_TYPE_K="${LLAMA_CACHE_TYPE_K:-}"
-RESUME_LLAMA_CACHE_TYPE_V="${LLAMA_CACHE_TYPE_V:-}"
-RESUME_LLAMA_FLASH_ATTN="${LLAMA_FLASH_ATTN:-n}"
-RESUME_LLAMA_UBATCH="${LLAMA_UBATCH:-}"
-RESUME_LLAMA_CPU_MOE="${LLAMA_CPU_MOE:-y}"
-RESUME_LLAMA_FIT="${LLAMA_FIT:-n}"
-RESUME_LLAMA_FIT_CTX="${LLAMA_FIT_CTX:-}"
-RESUME_LLAMA_MLOCK="${LLAMA_MLOCK:-n}"
-RESUME_LLAMA_DIO="${LLAMA_DIO:-n}"
+        printf '\n# User / environment\n'
+        printf 'RESUME_TARGET_USER=%q\n'           "${TARGET_USER}"
+        printf 'RESUME_TARGET_USER_HOME=%q\n'      "${TARGET_USER_HOME}"
+        printf 'RESUME_IS_DIFFERENT_USER=%q\n'     "${IS_DIFFERENT_USER}"
+        printf 'RESUME_HAS_NVIDIA_GPU=%q\n'        "${HAS_NVIDIA_GPU}"
+        printf 'RESUME_NVIDIA_DRIVER_TYPE=%q\n'    "${NVIDIA_DRIVER_TYPE:-}"
 
-# OpenClaw config
-RESUME_OPENCLAW_RELEASE_CHANNEL="${OPENCLAW_RELEASE_CHANNEL:-latest}"
-RESUME_EXPOSE_OPENCLAW="${EXPOSE_OPENCLAW:-n}"
-RESUME_OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
-RESUME_LOCAL_MIRROR_BASE="${LOCAL_MIRROR_BASE:-}"
+        printf '\n# LLM config\n'
+        printf 'RESUME_LLM_BACKEND_CHOICE=%q\n'         "${LLM_BACKEND_CHOICE:-}"
+        printf 'RESUME_FRONTEND_BACKEND_TARGET=%q\n'    "${FRONTEND_BACKEND_TARGET:-}"
+        printf 'RESUME_LLAMA_COMPONENT_ACTION=%q\n'     "${LLAMA_COMPONENT_ACTION:-skip}"
+        printf 'RESUME_OLLAMA_COMPONENT_ACTION=%q\n'    "${OLLAMA_COMPONENT_ACTION:-skip}"
+        printf 'RESUME_OPENWEBUI_COMPONENT_ACTION=%q\n' "${OPENWEBUI_COMPONENT_ACTION:-skip}"
+        printf 'RESUME_LIBRECHAT_COMPONENT_ACTION=%q\n' "${LIBRECHAT_COMPONENT_ACTION:-skip}"
+        printf 'RESUME_OPENCLAW_COMPONENT_ACTION=%q\n'  "${OPENCLAW_COMPONENT_ACTION:-skip}"
+        printf 'RESUME_LLAMA_CTX_SIZE=%q\n'             "${LLAMA_CTX_SIZE:-65536}"
+        printf 'RESUME_LOAD_DEFAULT_MODEL=%q\n'         "${LOAD_DEFAULT_MODEL:-n}"
+        printf 'RESUME_RUN_LLAMA_BENCH=%q\n'            "${RUN_LLAMA_BENCH:-n}"
+        printf 'RESUME_INSTALL_LLAMA_SERVICE=%q\n'      "${INSTALL_LLAMA_SERVICE:-n}"
+        printf 'RESUME_EXPOSE_LLM_ENGINE=%q\n'          "${EXPOSE_LLM_ENGINE:-n}"
+        printf 'RESUME_INSTALL_OPENWEBUI=%q\n'          "${INSTALL_OPENWEBUI:-n}"
+        printf 'RESUME_INSTALL_LIBRECHAT=%q\n'          "${INSTALL_LIBRECHAT:-n}"
+        printf 'RESUME_LLAMACPP_MODEL_REPO=%q\n'        "${LLAMACPP_MODEL_REPO:-}"
+        printf 'RESUME_OLLAMA_PULL_MODEL=%q\n'          "${OLLAMA_PULL_MODEL:-}"
+        printf 'RESUME_LLM_DEFAULT_MODEL_CHOICE=%q\n'   "${LLM_DEFAULT_MODEL_CHOICE:-}"
+        printf 'RESUME_SELECTED_MODEL_REPO=%q\n'        "${SELECTED_MODEL_REPO:-}"
+        printf 'RESUME_LLAMA_BUILD_VARIANT=%q\n'        "${LLAMA_BUILD_VARIANT:-}"
+        printf 'RESUME_LLAMA_VRAM_TIER=%q\n'            "${LLAMA_VRAM_TIER:-}"
+        printf 'RESUME_LLAMA_NGL=%q\n'                  "${LLAMA_NGL:-}"
+        printf 'RESUME_LLAMA_CACHE_TYPE_K=%q\n'         "${LLAMA_CACHE_TYPE_K:-}"
+        printf 'RESUME_LLAMA_CACHE_TYPE_V=%q\n'         "${LLAMA_CACHE_TYPE_V:-}"
+        printf 'RESUME_LLAMA_FLASH_ATTN=%q\n'           "${LLAMA_FLASH_ATTN:-n}"
+        printf 'RESUME_LLAMA_UBATCH=%q\n'               "${LLAMA_UBATCH:-}"
+        printf 'RESUME_LLAMA_CPU_MOE=%q\n'              "${LLAMA_CPU_MOE:-y}"
+        printf 'RESUME_LLAMA_FIT=%q\n'                  "${LLAMA_FIT:-n}"
+        printf 'RESUME_LLAMA_FIT_CTX=%q\n'              "${LLAMA_FIT_CTX:-}"
+        printf 'RESUME_LLAMA_MLOCK=%q\n'                "${LLAMA_MLOCK:-n}"
+        printf 'RESUME_LLAMA_DIO=%q\n'                  "${LLAMA_DIO:-n}"
 
-EOF
-    sudo chmod 600 "$RESUME_STATE_FILE"
+        printf '\n# OpenClaw config\n'
+        printf 'RESUME_OPENCLAW_RELEASE_CHANNEL=%q\n' "${OPENCLAW_RELEASE_CHANNEL:-latest}"
+        printf 'RESUME_EXPOSE_OPENCLAW=%q\n'          "${EXPOSE_OPENCLAW:-n}"
+        printf 'RESUME_OPENCLAW_PORT=%q\n'            "${OPENCLAW_PORT:-18789}"
+        printf 'RESUME_LOCAL_MIRROR_BASE=%q\n'        "${LOCAL_MIRROR_BASE:-}"
+
+        printf '\n# Firewall\n'
+        printf 'RESUME_ENABLE_UFW_AUTOMATICALLY=%q\n' "${ENABLE_UFW_AUTOMATICALLY:-n}"
+    } > "$tmp"
+
+    sudo install -m 600 "$tmp" "$RESUME_STATE_FILE"
+    rm -f "$tmp"
     print_info "Resume state saved to $RESUME_STATE_FILE"
 }
 

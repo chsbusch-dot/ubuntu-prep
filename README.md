@@ -81,13 +81,13 @@ Press 'i' to install selected, or 'q' to quit.
 - **NVIDIA Stack:**
     - Installs NVIDIA vGPU guest drivers via direct URL, Google Drive link, FTP, or HTTP.
     - Installs `btop` and `nvtop` for system and GPU monitoring.
-    - Installs the latest CUDA, NVIDIA Container Toolkit, and cuDNN.
+    - Installs the latest CUDA, NVIDIA Container Toolkit, and cuDNN. cuDNN install automatically waits for any background `unattended-upgrades` apt lock before running, avoiding lock conflicts on fresh VMs.
     - Dynamically detects GPU hardware and filters menu options accordingly (multi-GPU compile, compute version).
 - **AI/ML Tools:** Installs Google Gemini CLI and OpenClaw.
 - **Local LLM Support:**
-    - Builds `llama.cpp` from source with CUDA (single or multi-GPU) or installs Ollama.
-    - Sets up **Open-WebUI** and **LibreChat** via Docker with optional automated daily updates and auto-generated `librechat.yaml` connecting your local backend.
-    - **VRAM-aware model recommendation engine** selects and pulls the best models for your hardware tier (8GB–96GB VRAM). See also: [runthisllm.com](https://runthisllm.com).
+    - Builds `llama.cpp` from source with CUDA (single or multi-GPU) or installs Ollama. Compilation uses Ninja and all available CPU cores for fast builds (~3–4× vs make).
+    - Sets up **Open-WebUI** and **LibreChat** via Docker with optional automated daily updates and auto-generated `librechat.yaml` connecting your local backend. If a LAN git mirror is configured but the target user lacks SSH access, the clone automatically falls back to GitHub.
+    - **VRAM-aware model recommendation engine** selects and pulls the best models for your hardware tier (8GB–96GB VRAM). See also: [runthisllm.com](https://runthisllm.com). Model choice 5 (TinyStories-656K) is a tiny smoke-test model that runs on any GPU with minimal RAM and uses a safe minimal flag set.
     - Configures **CORS** for both Ollama (`OLLAMA_ORIGINS`) and llama.cpp (`--cors`) so external frontends connect without browser policy errors.
     - Bulletproof model downloading with progress bars and automatic retries for Hugging Face and Ollama repositories.
     - Installs systemd services so your LLM backend starts automatically on boot.
@@ -98,7 +98,7 @@ Press 'i' to install selected, or 'q' to quit.
 
 ## Structure
 
-One file on disk, organized as ~95 small functions internally. The single-file form exists for **distribution** — one `curl | bash` download, zero dependencies, trivial to inspect before running. The internal form exists for **maintenance** — each installer (Docker, NVIDIA driver, CUDA, cuDNN, Ollama, llama.cpp, OpenClaw, …) is its own function, and the dispatch/dependency/model-recommendation logic is covered by 218 [BATS](https://github.com/bats-core/bats-core) tests.
+One file on disk, organized as ~95 small functions internally. The single-file form exists for **distribution** — one `curl | bash` download, zero dependencies, trivial to inspect before running. The internal form exists for **maintenance** — each installer (Docker, NVIDIA driver, CUDA, cuDNN, Ollama, llama.cpp, OpenClaw, …) is its own function, and the dispatch/dependency/model-recommendation logic is covered by 163 [BATS](https://github.com/bats-core/bats-core) tests.
 
 See **[FUNCTIONS.md](FUNCTIONS.md)** for the complete component map — what each function does and where to find it.
 
@@ -323,7 +323,7 @@ The repository includes a comprehensive test suite in `test.sh`. It runs the fol
   ✅ save_ai_settings_file: output path is $HOME (admin home, not target-user home)
 
 === 6. Bats Unit Tests ===
-  ✅ 161 bats test(s) passed
+  ✅ 163 bats test(s) passed
 
 === 8. Ollama Model Validation (network) ===
   ✅ command-r-plus:104b

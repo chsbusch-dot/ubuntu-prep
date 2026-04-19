@@ -98,6 +98,21 @@ setup() {
     [[ "$result" == *"--hf-file"* ]]
 }
 
+@test "build_llama_hf_args: choice 5 returns exact TinyStories filename" {
+    LLM_DEFAULT_MODEL_CHOICE="5"
+    result=$(build_llama_hf_args)
+    [ "$result" = "--hf-repo raincandy-u/TinyStories-656K-Q8_0-GGUF --hf-file tinystories-656k-q8_0.gguf" ]
+}
+
+@test "build_llama_hf_args: choice 5 result contains only hf-repo and hf-file (no other flags)" {
+    LLM_DEFAULT_MODEL_CHOICE="5"
+    result=$(build_llama_hf_args)
+    [[ "$result" == "--hf-repo "* ]]
+    [[ "$result" == *" --hf-file "* ]]
+    word_count=$(echo "$result" | wc -w)
+    [ "$word_count" -eq 4 ]
+}
+
 @test "build_llama_hf_args: choice 1-4 uses SELECTED_MODEL_REPO" {
     LLM_DEFAULT_MODEL_CHOICE="3"
     SELECTED_MODEL_REPO="bartowski/Qwen2.5-7B-Instruct-GGUF"
