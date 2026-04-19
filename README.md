@@ -144,7 +144,6 @@ chmod +x ubuntu-prep-setup.sh
 ```
 --dry-run, -n   Show what would be installed for your selections and exit.
                 Safe: makes no changes, requires no sudo.
---headless      Run non-interactively with sensible defaults.
 --resume        Resume after the post-NVIDIA-driver reboot (usually automatic).
 --help, -h      Show help and exit.
 ```
