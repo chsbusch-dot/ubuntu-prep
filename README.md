@@ -96,6 +96,12 @@ Press 'i' to install selected, or 'q' to quit.
 - **Model Validation:** Includes a `check-models.sh` utility to validate Hugging Face and Ollama repositories, including deep `.gguf` file verification and API request deduplication to prevent rate-limiting.
 - **Pre-flight Checks:** Verifies the script is running on Ubuntu and not as root before doing anything.
 
+## Structure
+
+One file on disk, organized as ~95 small functions internally. The single-file form exists for **distribution** — one `curl | bash` download, zero dependencies, trivial to inspect before running. The internal form exists for **maintenance** — each installer (Docker, NVIDIA driver, CUDA, cuDNN, Ollama, llama.cpp, OpenClaw, …) is its own function, and the dispatch/dependency/model-recommendation logic is covered by 218 [BATS](https://github.com/bats-core/bats-core) tests.
+
+See **[FUNCTIONS.md](FUNCTIONS.md)** for the complete component map — what each function does and where to find it.
+
 ## Prerequisites
 
 - Fresh Ubuntu LTS Server installation (tested on 22.04 and later).
