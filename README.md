@@ -1,5 +1,7 @@
 # Ubuntu Local AI — Ollama, llama.cpp, LibreChat, Open-WebUI & OpenClaw with NVIDIA vGPU and CUDA
 
+Turns a fresh Ubuntu LTS server into a working local AI stack in ~15 minutes instead of 3 to 5 hours of manual setup.”
+
 A single `curl | bash` command that turns a fresh Ubuntu LTS Server into a fully configured local AI environment. NVIDIA vGPU or consumer GPU drivers, CUDA, cuDNN, llama.cpp, Ollama, Open-WebUI, LibreChat, and OpenClaw — all installed, wired up, and ready to go.
 
 The script detects your GPU, selects the right models for your VRAM, configures CORS and firewall rules, and sets up systemd services so everything survives a reboot. No dependencies. No Ansible. No second script to explain the first one.
@@ -101,9 +103,19 @@ Press 'i' to install selected, or 'q' to quit.
 
 ## Quick Start
 
+Run the latest tagged release (recommended — pinned, reviewable, reproducible):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/chsbusch-dot/Ubuntu-AI-Tools-Install/v1.0.0/ubuntu-prep-setup.sh)"
+```
+
+Or run the latest commit on `main` if you want the newest fixes (may be mid-change):
+
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/chsbusch-dot/Ubuntu-AI-Tools-Install/main/ubuntu-prep-setup.sh)"
 ```
+
+Release notes and the exact script bytes for each tag live on the [Releases page](https://github.com/chsbusch-dot/Ubuntu-AI-Tools-Install/releases). If you want to read the script before running it, download it with `curl -O` from either URL above and inspect it first.
 
 ## Manual Installation
 
