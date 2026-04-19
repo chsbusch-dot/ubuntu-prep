@@ -109,6 +109,8 @@ LLAMA_VRAM_TIER=""
 LLAMA_NGL=""     # GPU layers (0–99); empty = 99 for CUDA, 0 for CPU
 LLAMA_FIT="n"    # --fit on: auto-calculate ngl to fill VRAM
 LLAMA_FIT_CTX="" # --fit-ctx N: minimum ctx --fit will not shrink below
+LLAMA_MLOCK="n"  # --mlock: pin model in RAM to prevent idle-freeze swapping
+LLAMA_DIO="n"    # -dio: direct I/O, prevents RPC tensor upload hangs
 
 # ─── Headless Mode ────────────────────────────────────────────────
 # Run non-interactively with sensible defaults.
@@ -181,6 +183,8 @@ reset_local_ai_component_state() {
     LLAMA_CACHE_TYPE_V=""
     LLAMA_CPU_MOE="y"
     LLAMA_FLASH_ATTN="n"
+    LLAMA_MLOCK="n"
+    LLAMA_DIO="n"
     LLAMA_UBATCH=""
     LLAMA_VRAM_TIER=""
 }
@@ -2513,6 +2517,9 @@ configure_context_memory() {
         flash_attn="y"
     fi
 
+    local mlock="${LLAMA_MLOCK:-n}"
+    local dio="${LLAMA_DIO:-n}"
+
     # GPU layers and auto-fit (CUDA only); pre-seeded from LLAMA_NGL/LLAMA_FIT globals
     local ngl="${LLAMA_NGL:-99}"
     local fit_mode="${LLAMA_FIT:-n}"
@@ -2577,6 +2584,14 @@ configure_context_memory() {
         [[ "$cpu_moe" == "y" ]] && moe_disp="on"
         local fa_disp="off"
         [[ "$flash_attn" == "y" ]] && fa_disp="on"
+        local mlock_disp="off"
+        [[ "$mlock" == "y" ]] && mlock_disp="on"
+        local dio_disp="off"
+        [[ "$dio" == "y" ]] && dio_disp="on"
+
+        # Item numbers for mlock/dio depend on backend (CUDA has an extra GPU-layers item 6)
+        local mlock_item=6 dio_item=7
+        [[ "$target_backend" == "llama_cuda" ]] && mlock_item=7 && dio_item=8
 
         echo ""
         echo "┌──────────────────────────────────────────────────────────┐"
@@ -2594,6 +2609,8 @@ configure_context_memory() {
             fi
             printf "│ %-${width}s │\n" " 6. GPU layers:       [$ngl_disp]  (-ngl / --fit)"
         fi
+        printf "│ %-${width}s │\n" " ${mlock_item}. Mem lock (--mlock): [$mlock_disp]  (prevent idle swap)"
+        printf "│ %-${width}s │\n" " ${dio_item}. Direct I/O (-dio):  [$dio_disp]  (prevent tensor hang)"
         printf "│ %-${width}s │\n" ""
         printf "│ %-${width}s │\n" " Model weights:    ${model_disp} GB"
         printf "│ %-${width}s │\n" " KV cache:         ${kv_gb} GB"
@@ -2612,11 +2629,7 @@ configure_context_memory() {
             printf "│ %-${width}s │\n" ""
         fi
 
-        if [[ "$target_backend" == "llama_cuda" ]]; then
-            printf "│ %-${width}s │\n" " [c] Confirm  [1-6] Change  [d] Defaults"
-        else
-            printf "│ %-${width}s │\n" " [c] Confirm  [1-5] Change  [d] Defaults"
-        fi
+        printf "│ %-${width}s │\n" " [c] Confirm  [1-${dio_item}] Change  [d] Defaults"
         echo "└──────────────────────────────────────────────────────────┘"
         echo ""
         read -p "Your choice: " mem_choice
@@ -2709,7 +2722,10 @@ configure_context_memory() {
                 esac
                 ;;
             6)
-                if [[ "$target_backend" == "llama_cuda" ]]; then
+                if [[ "$target_backend" != "llama_cuda" ]]; then
+                    # CPU: item 6 = mlock
+                    if [[ "$mlock" == "y" ]]; then mlock="n"; else mlock="y"; fi
+                elif [[ "$target_backend" == "llama_cuda" ]]; then
                     echo ""
                     echo "  -ngl N     offload N transformer layers to GPU (0–99, 99 = all)."
                     echo "  --fit on   auto-calculate optimal -ngl to fill VRAM without OOM."
@@ -2739,16 +2755,34 @@ configure_context_memory() {
                     done
                 fi
                 ;;
+            7)
+                if [[ "$target_backend" != "llama_cuda" ]]; then
+                    # CPU: item 7 = dio
+                    if [[ "$dio" == "y" ]]; then dio="n"; else dio="y"; fi
+                else
+                    # CUDA: item 7 = mlock
+                    if [[ "$mlock" == "y" ]]; then mlock="n"; else mlock="y"; fi
+                fi
+                ;;
+            8)
+                if [[ "$target_backend" == "llama_cuda" ]]; then
+                    # CUDA: item 8 = dio
+                    if [[ "$dio" == "y" ]]; then dio="n"; else dio="y"; fi
+                fi
+                ;;
             d | D)
                 get_context_defaults "$vram_tier"
                 ctx="$CTX_DEFAULT"
                 ctk="$CTK_DEFAULT"
                 cpu_moe="y"
+                flash_attn="n"
+                mlock="n"
+                dio="n"
                 ubatch="$UBATCH_DEFAULT"
                 ngl=99
                 fit_mode="n"
                 fit_ctx=""
-                if [[ "$target_backend" == "llama_cuda" ]]; then flash_attn="y"; else flash_attn="n"; fi
+                if [[ "$target_backend" == "llama_cuda" ]]; then flash_attn="y"; fi
                 ;;
             c | C)
                 break
@@ -2764,6 +2798,8 @@ configure_context_memory() {
     LLAMA_CACHE_TYPE_V="$ctk"
     LLAMA_CPU_MOE="$cpu_moe"
     LLAMA_FLASH_ATTN="$flash_attn"
+    LLAMA_MLOCK="$mlock"
+    LLAMA_DIO="$dio"
     LLAMA_UBATCH="$ubatch"
     LLAMA_NGL="$ngl"
     LLAMA_FIT="$fit_mode"
@@ -3332,6 +3368,12 @@ install_local_llm() {
         fi
         if [[ "$LLAMA_CPU_MOE" == "y" ]]; then
             llama_host_args+=" --cpu-moe"
+        fi
+        if [[ "$LLAMA_MLOCK" == "y" ]]; then
+            llama_host_args+=" --mlock"
+        fi
+        if [[ "$LLAMA_DIO" == "y" ]]; then
+            llama_host_args+=" -dio"
         fi
 
         # Pre-download model with curl progress bar (if using HF repo).
@@ -4892,6 +4934,8 @@ edit_llama_server_parameters() {
     LLAMA_CACHE_TYPE_V=""
     LLAMA_CPU_MOE="y"
     LLAMA_FLASH_ATTN="n"
+    LLAMA_MLOCK="n"
+    LLAMA_DIO="n"
     LLAMA_UBATCH=""
     LLAMA_VRAM_TIER=""
     LLAMA_NGL=99
@@ -4899,15 +4943,18 @@ edit_llama_server_parameters() {
     LLAMA_FIT_CTX=""
     LLAMA_COMPONENT_ACTION="repair" # needed so llama_requires_model_selection returns true
 
-    # Pre-fill ngl/fit from the existing unit so the context menu shows current values
+    # Pre-fill ngl/fit/mlock/dio from the existing unit so the context menu shows current values
+    local cur_unit_line
+    cur_unit_line=$(sudo grep -m1 '^ExecStart=' "$unit_file" 2>/dev/null || true)
     if [[ "$is_cuda" == "y" ]]; then
-        local cur_unit_line cur_ngl_hint cur_fit_hint
-        cur_unit_line=$(sudo grep -m1 '^ExecStart=' "$unit_file" 2>/dev/null || true)
+        local cur_ngl_hint cur_fit_hint
         cur_ngl_hint=$(echo "$cur_unit_line" | grep -oE -- '-ngl [0-9]+' | awk '{print $2}' || true)
         cur_fit_hint=$(echo "$cur_unit_line" | grep -oE -- '--fit (on|off)' | awk '{print $2}' || true)
         [[ -n "$cur_ngl_hint" ]] && LLAMA_NGL="$cur_ngl_hint"
         [[ "$cur_fit_hint" == "on" ]] && LLAMA_FIT="y"
     fi
+    echo "$cur_unit_line" | grep -q -- '--mlock' && LLAMA_MLOCK="y"
+    echo "$cur_unit_line" | grep -q -- '-dio' && LLAMA_DIO="y"
 
     clear
     print_status_header
@@ -4950,6 +4997,8 @@ edit_llama_server_parameters() {
     [[ "$LLAMA_FLASH_ATTN" == "y" && "$is_cuda" == "y" ]] && llama_host_args+=" --flash-attn on"
     [[ -n "$LLAMA_UBATCH" ]] && llama_host_args+=" --ubatch-size $LLAMA_UBATCH"
     [[ "$LLAMA_CPU_MOE" == "y" ]] && llama_host_args+=" --cpu-moe"
+    [[ "$LLAMA_MLOCK" == "y" ]] && llama_host_args+=" --mlock"
+    [[ "$LLAMA_DIO" == "y" ]] && llama_host_args+=" -dio"
 
     # Download model if it's an HF repo that isn't already cached
     if [[ "$hf_args" == *"--hf-repo"* ]]; then
