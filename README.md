@@ -1,6 +1,6 @@
 # Ubuntu Local AI — Ollama, llama.cpp, LibreChat, Open-WebUI & OpenClaw with NVIDIA vGPU and CUDA
 
-Turns a fresh Ubuntu LTS server into a working local AI stack in ~15 minutes instead of 3 to 5 hours of manual setup.”
+Turns a fresh Ubuntu LTS server into a working local AI stack in ~15 minutes instead of 3 to 5 hours of manual setup.
 
 A single `curl | bash` command that turns a fresh Ubuntu LTS Server into a fully configured local AI environment. NVIDIA vGPU or consumer GPU drivers, CUDA, cuDNN, llama.cpp, Ollama, Open-WebUI, LibreChat, and OpenClaw — all installed, wired up, and ready to go.
 
